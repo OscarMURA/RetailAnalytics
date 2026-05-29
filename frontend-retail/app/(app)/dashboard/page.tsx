@@ -58,7 +58,7 @@ export default function DashboardPage() {
         ) : kpis.error ? (
           <ErrorBlock message={kpis.error} onRetry={kpis.reload} height={140} />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
             {kpis.data?.kpis.map((k) => (
               <KpiCard key={k.key} kpi={k} />
             ))}
@@ -67,7 +67,7 @@ export default function DashboardPage() {
       </section>
 
       {/* Top productos / clientes */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6 mb-6">
         <Card>
           <CardHeader
             icon={<Package size={16} />}
@@ -164,8 +164,8 @@ export default function DashboardPage() {
       </section>
 
       {/* Categorías donut + cobertura */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-2">
-        <Card className="lg:col-span-2">
+      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 mb-2">
+        <Card className="xl:col-span-2">
           <CardHeader
             icon={<Filter size={16} />}
             title="Top categorías por volumen"

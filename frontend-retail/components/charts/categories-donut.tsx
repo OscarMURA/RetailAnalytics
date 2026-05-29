@@ -8,8 +8,8 @@ import type { CategoryItem } from "@/lib/types";
 export function CategoriesDonut({ data, activeCount }: { data: CategoryItem[]; activeCount: number }) {
   const max = Math.max(...data.map((d) => d.value), 1);
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6 items-center">
-      <div className="relative w-full h-[260px]">
+    <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-6 items-center">
+      <div className="relative w-full h-[220px] sm:h-[260px] min-w-0">
         <ResponsiveContainer>
           <PieChart>
             <Pie
@@ -37,18 +37,20 @@ export function CategoriesDonut({ data, activeCount }: { data: CategoryItem[]; a
           </div>
         </div>
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-1.5 min-w-0">
         {data.map((d, i) => (
-          <div key={d.name} className="flex items-center gap-3 py-1.5 border-b border-slate-100 last:border-0">
+          <div key={d.name} className="flex items-center gap-2 sm:gap-3 py-1.5 border-b border-slate-100 last:border-0">
             <span
               className="w-2.5 h-2.5 rounded-sm shrink-0"
               style={{ background: CHART_COLORS[i % CHART_COLORS.length] }}
             />
-            <span className="text-sm text-slate-700 flex-1">{d.name}</span>
-            <span className="text-sm font-semibold text-slate-900 tabular-nums w-14 text-right">
+            <span className="text-sm text-slate-700 flex-1 min-w-0 truncate" title={d.name}>
+              {d.name}
+            </span>
+            <span className="text-sm font-semibold text-slate-900 tabular-nums w-12 sm:w-14 text-right shrink-0">
               {d.value.toFixed(1)}%
             </span>
-            <div className="w-20 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+            <div className="hidden sm:block w-16 lg:w-20 h-1.5 rounded-full bg-slate-100 overflow-hidden shrink-0">
               <div
                 className="h-full rounded-full"
                 style={{

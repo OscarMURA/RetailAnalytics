@@ -19,10 +19,12 @@ function colorFor(v: number): string {
 
 export function CorrelationHeatmap({ labels, matrix }: CorrelationResponse) {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto -mx-1 px-1">
       <div
-        className="inline-grid"
-        style={{ gridTemplateColumns: `160px repeat(${labels.length}, minmax(80px, 1fr))` }}
+        className="grid min-w-[440px]"
+        style={{
+          gridTemplateColumns: `clamp(96px, 22vw, 160px) repeat(${labels.length}, minmax(0, 1fr))`,
+        }}
       >
         <div />
         {labels.map((l) => (
@@ -32,7 +34,9 @@ export function CorrelationHeatmap({ labels, matrix }: CorrelationResponse) {
         ))}
         {matrix.map((row, i) => (
           <Fragment key={i}>
-            <div className="text-xs text-slate-700 font-medium pr-3 py-2 text-right">{labels[i]}</div>
+            <div className="text-[11px] sm:text-xs text-slate-700 font-medium pr-2 sm:pr-3 py-2 text-right leading-tight self-center">
+              {labels[i]}
+            </div>
             {row.map((v, j) => (
               <div
                 key={j}

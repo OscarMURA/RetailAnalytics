@@ -80,11 +80,11 @@ function BoxplotCard() {
         subtitle="Boxplot · min / Q1 / mediana / Q3 / max"
       />
       {box.loading ? (
-        <LoadingBlock height={320} />
+        <LoadingBlock height={340} />
       ) : box.error ? (
-        <ErrorBlock message={box.error} onRetry={box.reload} height={320} />
+        <ErrorBlock message={box.error} onRetry={box.reload} height={340} />
       ) : !box.data?.length ? (
-        <EmptyBlock height={320} />
+        <EmptyBlock height={340} />
       ) : (
         <Boxplot data={box.data} />
       )}
@@ -172,9 +172,9 @@ export default function VisualizacionesPage() {
         subtitle="Cuatro ángulos del comportamiento transaccional: evolución temporal, dispersión por categoría, distribución semanal y correlaciones."
         onRefresh={refresh}
       />
-      <section key={nonce} className="grid grid-cols-1 gap-6">
+      <section key={nonce} className="grid grid-cols-1 gap-4 sm:gap-6">
         <TimeSeriesCard />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6">
           <BoxplotCard />
           <WeekdayCard />
         </div>

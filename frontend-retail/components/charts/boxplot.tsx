@@ -80,10 +80,10 @@ interface TickProps {
 
 function CategoryTick({ x = 0, y = 0, payload }: TickProps) {
   const full = payload?.value ?? "";
-  const label = full.length > 14 ? `${full.slice(0, 13)}…` : full;
+  const label = full.length > 16 ? `${full.slice(0, 15)}…` : full;
   return (
     <g transform={`translate(${x},${y})`}>
-      <text dy={12} textAnchor="middle" fontSize={10} fill="#64748b">
+      <text dy={4} dx={-4} textAnchor="end" fontSize={10} fill="#64748b" transform="rotate(-35)">
         <title>{full}</title>
         {label}
       </text>
@@ -106,11 +106,11 @@ export function Boxplot({ data }: { data: BoxplotCategory[] }) {
   const domainMax = Math.ceil(maxVal * 1.1);
 
   return (
-    <div className="h-[320px] w-full">
+    <div className="h-[340px] w-full">
       <ResponsiveContainer>
-        <ComposedChart data={rows} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
+        <ComposedChart data={rows} margin={{ top: 16, right: 12, left: 8, bottom: 8 }}>
           <CartesianGrid vertical={false} stroke="#e2e8f0" strokeDasharray="3 3" />
-          <XAxis dataKey="category" tickLine={false} axisLine={{ stroke: "#e2e8f0" }} interval={0} tick={<CategoryTick />} height={36} />
+          <XAxis dataKey="category" tickLine={false} axisLine={{ stroke: "#e2e8f0" }} interval={0} tick={<CategoryTick />} height={72} />
           <YAxis tickLine={false} axisLine={false} domain={[0, domainMax]} width={32} />
           <Tooltip content={<BoxTooltip />} cursor={{ fill: "rgba(15,23,42,0.04)" }} />
           <Bar dataKey="box" stackId="a" shape={<BoxShape />} isAnimationActive={false} legendType="none" />
