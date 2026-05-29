@@ -22,8 +22,14 @@ export function WeekdayDistributionChart({ data }: { data: WeekdayDistribution[]
           <YAxis
             tickLine={false}
             axisLine={false}
-            width={40}
-            tickFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v))}
+            width={52}
+            tickFormatter={(v: number) =>
+              v >= 1_000_000
+                ? `${(v / 1_000_000).toFixed(1)}M`
+                : v >= 1000
+                  ? `${Math.round(v / 1000)}k`
+                  : String(v)
+            }
           />
           <Tooltip
             cursor={{ fill: "rgba(15,23,42,0.04)" }}

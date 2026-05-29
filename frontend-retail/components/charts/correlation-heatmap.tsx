@@ -21,9 +21,9 @@ export function CorrelationHeatmap({ labels, matrix }: CorrelationResponse) {
   return (
     <div className="overflow-x-auto -mx-1 px-1">
       <div
-        className="grid min-w-[440px]"
+        className="grid min-w-[440px] max-w-[760px]"
         style={{
-          gridTemplateColumns: `clamp(96px, 22vw, 160px) repeat(${labels.length}, minmax(0, 1fr))`,
+          gridTemplateColumns: `clamp(84px, 16vw, 140px) repeat(${labels.length}, minmax(0, 120px))`,
         }}
       >
         <div />

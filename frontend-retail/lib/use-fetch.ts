@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export interface FetchState<T> {
   data: T | null;
@@ -15,23 +15,21 @@ interface InternalState<T> {
   error: string | null;
 }
 
-// `deps` controls when a re-fetch happens; the latest `fetcher` is always used
-// via a ref without forcing it into the dependency list. The synchronous
-// loading reset at the start of the effect is the standard fetch-in-effect
-// pattern (React Compiler's heuristic flags it as a false positive here).
+// `deps` (serialized into `depKey`) controls when a re-fetch happens. The
+// effect calls the current render's `fetcher` directly, so the data always
+// matches the deps that triggered the fetch — `fetcher` is intentionally kept
+// out of the dependency list to avoid re-fetching on every render.
 export function useFetch<T>(fetcher: () => Promise<T>, deps: unknown[] = []): FetchState<T> {
   const [state, setState] = useState<InternalState<T>>({ data: null, loading: true, error: null });
   const [nonce, setNonce] = useState(0);
 
-  const fetcherRef = useRef(fetcher);
   const depKey = JSON.stringify(deps);
 
   useEffect(() => {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset before async fetch
     setState((s) => ({ ...s, loading: true, error: null }));
-    fetcherRef
-      .current()
+    fetcher()
       .then((d) => {
         if (!cancelled) setState({ data: d, loading: false, error: null });
       })
@@ -46,12 +44,8 @@ export function useFetch<T>(fetcher: () => Promise<T>, deps: unknown[] = []): Fe
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- depKey captures the fetcher's inputs; nonce forces a manual reload
   }, [depKey, nonce]);
-
-  // Keep the ref pointed at the latest fetcher after each render.
-  useEffect(() => {
-    fetcherRef.current = fetcher;
-  });
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 

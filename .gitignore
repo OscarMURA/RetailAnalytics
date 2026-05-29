@@ -50,6 +50,7 @@ AGENTS.md
 
 # ── Artefactos de verificación ───────────────────────────────────────
 /login.png
+.playwright-mcp/
 
 # ── Editores / SO ────────────────────────────────────────────────────
 .idea/
