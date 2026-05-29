@@ -2,14 +2,19 @@ import type {
   KpisResponse,
   TopProduct,
   TopCustomer,
+  CustomerSortBy,
   CategoriesResponse,
   CalendarResponse,
   CoverageResponse,
+  PeakTimeseriesResponse,
   Granularity,
   TimeSeriesResponse,
-  BoxplotCategory,
+  BoxplotDimension,
+  BoxplotResponse,
   WeekdayDistribution,
   CorrelationResponse,
+  MetaResponse,
+  DataFilters,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -23,11 +28,13 @@ export class ApiError extends Error {
   }
 }
 
-async function get<T>(path: string, params?: Record<string, string | number>): Promise<T> {
+type ParamValue = string | number | undefined;
+
+async function get<T>(path: string, params?: Record<string, ParamValue>): Promise<T> {
   const url = new URL(`/api${path}`, API_BASE);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      url.searchParams.set(k, String(v));
+      if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
     }
   }
   let res: Response;
@@ -45,16 +52,36 @@ async function get<T>(path: string, params?: Record<string, string | number>): P
   return (await res.json()) as T;
 }
 
+// Translate global filters into query params shared by every data endpoint.
+function filterParams(f?: DataFilters): Record<string, ParamValue> {
+  if (!f) return {};
+  return {
+    stores: f.stores.length ? f.stores.join(",") : undefined,
+    from: f.from ?? undefined,
+    to: f.to ?? undefined,
+  };
+}
+
 export const api = {
-  kpis: () => get<KpisResponse>("/summary/kpis"),
-  topProducts: (limit = 10) => get<TopProduct[]>("/summary/top-products", { limit }),
-  topCustomers: (limit = 10) => get<TopCustomer[]>("/summary/top-customers", { limit }),
-  categories: () => get<CategoriesResponse>("/summary/categories"),
-  calendar: (days = 90) => get<CalendarResponse>("/summary/calendar", { days }),
-  coverage: () => get<CoverageResponse>("/summary/coverage"),
-  timeseries: (granularity: Granularity) =>
-    get<TimeSeriesResponse>("/viz/timeseries", { granularity }),
-  boxplotCategories: () => get<BoxplotCategory[]>("/viz/boxplot-categories"),
-  weekdayDistribution: () => get<WeekdayDistribution[]>("/viz/weekday-distribution"),
-  correlation: () => get<CorrelationResponse>("/viz/correlation"),
+  meta: () => get<MetaResponse>("/meta"),
+
+  kpis: (f?: DataFilters) => get<KpisResponse>("/summary/kpis", filterParams(f)),
+  topProducts: (limit = 10, f?: DataFilters) =>
+    get<TopProduct[]>("/summary/top-products", { limit, ...filterParams(f) }),
+  topCustomers: (limit = 10, by: CustomerSortBy = "transactions", f?: DataFilters) =>
+    get<TopCustomer[]>("/summary/top-customers", { limit, by, ...filterParams(f) }),
+  categories: (f?: DataFilters) => get<CategoriesResponse>("/summary/categories", filterParams(f)),
+  calendar: (days = 90, f?: DataFilters) =>
+    get<CalendarResponse>("/summary/calendar", { days, ...filterParams(f) }),
+  peakTimeseries: (f?: DataFilters) =>
+    get<PeakTimeseriesResponse>("/summary/peak-timeseries", filterParams(f)),
+  coverage: (f?: DataFilters) => get<CoverageResponse>("/summary/coverage", filterParams(f)),
+
+  timeseries: (granularity: Granularity, f?: DataFilters) =>
+    get<TimeSeriesResponse>("/viz/timeseries", { granularity, ...filterParams(f) }),
+  boxplot: (dimension: BoxplotDimension, f?: DataFilters) =>
+    get<BoxplotResponse>("/viz/boxplot", { dimension, ...filterParams(f) }),
+  weekdayDistribution: (f?: DataFilters) =>
+    get<WeekdayDistribution[]>("/viz/weekday-distribution", filterParams(f)),
+  correlation: (f?: DataFilters) => get<CorrelationResponse>("/viz/correlation", filterParams(f)),
 };

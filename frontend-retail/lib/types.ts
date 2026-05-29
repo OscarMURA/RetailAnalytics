@@ -1,8 +1,21 @@
 // Typed contract for the RetailAnalytics FastAPI backend.
 // Mirrors the shapes documented in backend/API_CONTRACT.md.
 
-export type KpiIcon = "package" | "activity" | "users" | "box";
+export type KpiIcon = "package" | "activity" | "users" | "box" | "store";
 export type KpiDirection = "up" | "down" | "flat";
+
+// ── Global filters ────────────────────────────────────────────────────
+export interface MetaResponse {
+  stores: string[]; // store ids, e.g. "102"
+  dateMin: string; // YYYY-MM-DD
+  dateMax: string; // YYYY-MM-DD
+}
+
+export interface DataFilters {
+  stores: string[]; // store ids; empty = all
+  from: string | null; // YYYY-MM-DD
+  to: string | null; // YYYY-MM-DD
+}
 
 export interface Kpi {
   key: string;
@@ -25,15 +38,21 @@ export interface TopProduct {
   units: number;
 }
 
+export type CustomerSortBy = "transactions" | "units";
+
 export interface TopCustomer {
   rank: number;
   id: string;
   units: number;
+  transactions: number;
 }
 
 export interface CategoryItem {
   name: string;
-  value: number;
+  value: number; // % of total units
+  units: number;
+  transactions: number;
+  customers: number;
 }
 
 export interface CategoriesResponse {
@@ -64,27 +83,54 @@ export interface CoverageResponse {
   avgTicket: number;
 }
 
+// Días pico · serie de tiempo de transacciones con top-5 días marcados.
+export interface PeakTimeseriesResponse {
+  points: { date: string; transactions: number }[];
+  top5: string[]; // dates matching points.date
+}
+
 export type Granularity = "day" | "week" | "month";
 
 export interface TimeSeriesPoint {
   date: string;
   units: number;
+  transactions: number;
 }
 
 export interface TimeSeriesResponse {
-  total: number;
+  total: number; // units
   avg: number;
   peak: number;
+  totalTransactions: number;
+  avgTransactions: number;
+  peakTransactions: number;
   points: TimeSeriesPoint[];
 }
 
-export interface BoxplotCategory {
-  category: string;
+export type BoxplotDimension =
+  | "units-per-category"
+  | "units-per-customer"
+  | "transactions-per-customer";
+
+export interface BoxplotBox {
+  label: string;
   min: number;
   q1: number;
   median: number;
   q3: number;
   max: number;
+}
+
+export interface BoxplotStats {
+  count: number;
+  mean: number;
+  p50: number; // median
+}
+
+export interface BoxplotResponse {
+  dimension: BoxplotDimension;
+  boxes: BoxplotBox[];
+  stats: BoxplotStats;
 }
 
 export interface WeekdayDistribution {
