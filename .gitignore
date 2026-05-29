@@ -1,0 +1,58 @@
+# ── Dataset (datos crudos, no se versionan) ──────────────────────────
+DataSet/
+*.csv
+__MACOSX/
+.DS_Store
+
+# ── Prototipo Frontend original (reemplazado por frontend-retail/) ────
+Frontend/
+
+# ── Documentos fuente ────────────────────────────────────────────────
+*.pdf
+
+# ── Artefactos de serving / salida del ETL Spark ─────────────────────
+backend/serving/
+backend/spark-warehouse/
+spark-warehouse/
+*.parquet
+metastore_db/
+derby.log
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── Node / Next.js ───────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+.turbo/
+dist/
+build/
+*.tsbuildinfo
+.vercel/
+
+# ── Entorno / secretos ───────────────────────────────────────────────
+.env
+.env*.local
+
+# ── Archivos de Claude / agentes (no se versionan) ───────────────────
+CLAUDE.md
+AGENTS.md
+.claude/
+
+# ── Artefactos de verificación ───────────────────────────────────────
+/login.png
+
+# ── Editores / SO ────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.log
+Thumbs.db

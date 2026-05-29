@@ -1,0 +1,13 @@
+[project]
+name = "retailanalytics-backend"
+version = "0.1.0"
+description = "RetailAnalytics backend: Spark ETL + FastAPI serving real supermarket transaction analytics"
+requires-python = ">=3.11"
+dependencies = [
+    "pyspark==4.1.1",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+]
+
+[tool.uv]
+package = false
