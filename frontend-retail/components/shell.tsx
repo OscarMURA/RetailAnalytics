@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAuth, ROLES, type Role } from "@/lib/auth";
-import { Badge } from "@/components/ui";
+import { FilterBar } from "@/components/filter-bar";
 
 interface NavLink {
   href: string;
@@ -103,12 +103,17 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         )}
       >
         <div className="h-16 px-5 flex items-center gap-3 border-b border-slate-200 shrink-0">
-          <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white grid place-items-center shadow-sm shadow-emerald-600/30">
+          <div
+            className="w-9 h-9 rounded-xl text-white grid place-items-center shadow-sm shadow-emerald-600/30"
+            style={{ background: "var(--gradient-brand)" }}
+          >
             <ShoppingCart size={18} strokeWidth={2} />
           </div>
           <div className="leading-tight flex-1 min-w-0">
-            <div className="text-sm font-semibold text-slate-900 tracking-tight">RetailAnalytics</div>
-            <div className="text-[10px] uppercase tracking-wider text-slate-400 font-medium">Spark · Dataproc</div>
+            <div className="text-sm font-bold text-slate-900 tracking-tight">
+              Retail<span className="text-gradient-brand">Analytics</span>
+            </div>
+            <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 font-medium">Spark · Dataproc</div>
           </div>
           <button
             onClick={onClose}
@@ -253,39 +258,69 @@ export function PageHeader({
   subtitle,
   eyebrow,
   onRefresh,
+  showFilters = false,
 }: {
   title: string;
   subtitle?: string;
   eyebrow?: string;
   onRefresh?: () => void;
+  showFilters?: boolean;
 }) {
   return (
-    <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pb-5 sm:pb-6 mb-5 sm:mb-6 border-b border-slate-200">
-      <div className="flex-1 min-w-0 basis-[280px]">
-        {eyebrow && (
-          <div className="text-[11px] uppercase tracking-wider text-emerald-600 font-semibold mb-2">
-            {eyebrow}
+    <header className="relative overflow-hidden rounded-2xl bg-ink text-white mb-6 shadow-pop">
+      {/* dot-grid motif + brand glow */}
+      <div className="absolute inset-0 bg-dotgrid-light opacity-60" aria-hidden />
+      <div
+        className="absolute -top-24 -right-16 w-80 h-80 rounded-full pointer-events-none"
+        style={{ background: "radial-gradient(circle, rgba(16,185,129,0.28) 0%, transparent 65%)" }}
+        aria-hidden
+      />
+      <div
+        className="absolute -bottom-28 -left-10 w-72 h-72 rounded-full pointer-events-none"
+        style={{ background: "radial-gradient(circle, rgba(14,165,233,0.18) 0%, transparent 65%)" }}
+        aria-hidden
+      />
+      <span className="absolute left-0 top-0 bottom-0 w-1" style={{ background: "var(--gradient-brand)" }} aria-hidden />
+
+      <div className="relative px-5 sm:px-7 py-6 sm:py-7">
+        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
+          <div className="flex-1 min-w-0 basis-[280px]">
+            {eyebrow && (
+              <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-semibold mb-2.5">
+                <span className="w-5 h-px bg-emerald-400/70" />
+                <span className="text-emerald-300">{eyebrow}</span>
+              </div>
+            )}
+            <h1 className="text-2xl sm:text-[2rem] font-bold tracking-tight leading-tight text-white">{title}</h1>
+            {subtitle && <p className="text-sm text-slate-300/90 mt-2 max-w-2xl leading-relaxed">{subtitle}</p>}
+          </div>
+          <div className="flex flex-wrap items-center justify-start sm:justify-end gap-2 shrink-0 w-full sm:w-auto">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-emerald-400/10 text-emerald-300 ring-1 ring-emerald-400/25">
+              <span className="relative flex w-1.5 h-1.5">
+                <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+                <span className="relative inline-flex rounded-full w-1.5 h-1.5 bg-emerald-400" />
+              </span>
+              Datos en vivo
+            </span>
+            <button
+              onClick={onRefresh}
+              className="inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border border-white/15 bg-white/5 text-slate-200 hover:bg-white/10 hover:text-white transition-colors"
+            >
+              <RefreshCw size={14} />
+              <span className="hidden sm:inline">Refrescar</span>
+            </button>
+            <button className="inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-lg text-white shadow-sm transition-transform hover:-translate-y-px" style={{ background: "var(--gradient-brand)" }}>
+              <Download size={14} />
+              <span className="hidden sm:inline">Exportar</span>
+            </button>
+          </div>
+        </div>
+        {showFilters && (
+          <div className="mt-5 pt-4 border-t border-white/10 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mr-1">Filtros</span>
+            <FilterBar />
           </div>
         )}
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">{title}</h1>
-        {subtitle && <p className="text-sm text-slate-500 mt-1.5 max-w-2xl">{subtitle}</p>}
-      </div>
-      <div className="flex flex-wrap items-center justify-start sm:justify-end gap-2 shrink-0 w-full sm:w-auto">
-        <Badge tone="emerald" className="py-1! px-2.5!">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="font-medium">Datos en vivo</span>
-        </Badge>
-        <button
-          onClick={onRefresh}
-          className="inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
-        >
-          <RefreshCw size={14} />
-          <span className="hidden sm:inline">Refrescar</span>
-        </button>
-        <button className="inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg bg-slate-900 text-white hover:bg-slate-800 transition-colors">
-          <Download size={14} />
-          <span className="hidden sm:inline">Exportar</span>
-        </button>
       </div>
     </header>
   );
@@ -294,7 +329,7 @@ export function PageHeader({
 export function AppShell({ children }: { children: ReactNode }) {
   const [navOpen, setNavOpen] = useState(false);
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-[#f6f8fa]">
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
       <div className="lg:pl-64 min-h-screen flex flex-col">
         <MobileTopBar onMenu={() => setNavOpen(true)} />

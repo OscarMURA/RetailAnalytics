@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowDownRight, ArrowUpRight, Minus, Package, Activity, Users, Box } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Minus, Package, Activity, Users, Box, Store } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/constants";
 import type { Kpi, KpiIcon } from "@/lib/types";
@@ -10,16 +10,19 @@ export function Card({
   className = "",
   interactive = false,
   padded = true,
+  accent = false,
 }: {
   children: ReactNode;
   className?: string;
   interactive?: boolean;
   padded?: boolean;
+  accent?: boolean;
 }) {
   return (
     <div
       className={cn(
-        "bg-white border border-slate-200 rounded-xl shadow-soft",
+        "bg-white border border-slate-200/80 rounded-xl shadow-soft",
+        accent && "card-accent",
         interactive && "transition-all duration-200 hover:shadow-pop hover:-translate-y-px",
         padded && "p-4 sm:p-6",
         className,
@@ -44,11 +47,15 @@ export function CardHeader({
   return (
     <div className="flex items-start justify-between gap-4 mb-5">
       <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          {icon && <span className="text-slate-400">{icon}</span>}
+        <div className="flex items-center gap-2.5">
+          {icon && (
+            <span className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 grid place-items-center ring-1 ring-emerald-100/70 shrink-0">
+              {icon}
+            </span>
+          )}
           <h2 className="text-base font-semibold text-slate-900 tracking-tight">{title}</h2>
         </div>
-        {subtitle && <p className="text-xs text-slate-500 mt-1">{subtitle}</p>}
+        {subtitle && <p className="text-xs text-slate-500 mt-1.5">{subtitle}</p>}
       </div>
       {right && <div className="shrink-0">{right}</div>}
     </div>
@@ -119,24 +126,34 @@ const KPI_ICONS: Record<KpiIcon, ReactNode> = {
   activity: <Activity size={20} />,
   users: <Users size={20} />,
   box: <Box size={20} />,
+  store: <Store size={20} />,
 };
 
 export function KpiCard({ kpi }: { kpi: Kpi }) {
   return (
-    <Card interactive className="p-5! ">
-      <div className="flex items-start justify-between">
-        <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 grid place-items-center ring-1 ring-emerald-100">
+    <Card interactive className="p-5! relative overflow-hidden group">
+      {/* subtle corner glow on hover */}
+      <div
+        className="absolute -top-10 -right-10 w-24 h-24 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+        style={{ background: "radial-gradient(circle, rgba(16,185,129,0.12) 0%, transparent 70%)" }}
+        aria-hidden
+      />
+      <div className="relative flex items-start justify-between">
+        <div
+          className="w-10 h-10 rounded-xl grid place-items-center text-white shadow-sm shadow-emerald-600/25"
+          style={{ background: "var(--gradient-brand)" }}
+        >
           {KPI_ICONS[kpi.icon]}
         </div>
         <Delta value={kpi.delta} direction={kpi.direction} />
       </div>
-      <div className="mt-4">
+      <div className="relative mt-4">
         <div className="text-[28px] font-bold tracking-tight text-slate-900 leading-none tabular-nums">
           {formatNumber(kpi.value)}
         </div>
         <div className="mt-2 text-xs text-slate-500 font-medium">{kpi.label}</div>
       </div>
-      <div className="mt-3 pt-3 border-t border-slate-100 text-[11px] text-slate-400">
+      <div className="relative mt-3 pt-3 border-t border-slate-100 text-[11px] text-slate-400">
         vs período anterior · 30 días
       </div>
     </Card>
