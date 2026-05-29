@@ -267,20 +267,21 @@ export function PageHeader({
   showFilters?: boolean;
 }) {
   return (
-    <header className="relative overflow-hidden rounded-2xl bg-ink text-white mb-6 shadow-pop">
-      {/* dot-grid motif + brand glow */}
-      <div className="absolute inset-0 bg-dotgrid-light opacity-60" aria-hidden />
-      <div
-        className="absolute -top-24 -right-16 w-80 h-80 rounded-full pointer-events-none"
-        style={{ background: "radial-gradient(circle, rgba(16,185,129,0.28) 0%, transparent 65%)" }}
-        aria-hidden
-      />
-      <div
-        className="absolute -bottom-28 -left-10 w-72 h-72 rounded-full pointer-events-none"
-        style={{ background: "radial-gradient(circle, rgba(14,165,233,0.18) 0%, transparent 65%)" }}
-        aria-hidden
-      />
-      <span className="absolute left-0 top-0 bottom-0 w-1" style={{ background: "var(--gradient-brand)" }} aria-hidden />
+    <header className="relative rounded-2xl bg-ink text-white mb-6 shadow-pop">
+      {/* dot-grid motif + brand glow — clipped to the rounded corners in its
+          own layer so overlays like the filter dropdown can overflow freely */}
+      <div className="absolute inset-0 overflow-hidden rounded-2xl" aria-hidden>
+        <div className="absolute inset-0 bg-dotgrid-light opacity-60" />
+        <div
+          className="absolute -top-24 -right-16 w-80 h-80 rounded-full pointer-events-none"
+          style={{ background: "radial-gradient(circle, rgba(16,185,129,0.28) 0%, transparent 65%)" }}
+        />
+        <div
+          className="absolute -bottom-28 -left-10 w-72 h-72 rounded-full pointer-events-none"
+          style={{ background: "radial-gradient(circle, rgba(14,165,233,0.18) 0%, transparent 65%)" }}
+        />
+        <span className="absolute left-0 top-0 bottom-0 w-1" style={{ background: "var(--gradient-brand)" }} />
+      </div>
 
       <div className="relative px-5 sm:px-7 py-6 sm:py-7">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
