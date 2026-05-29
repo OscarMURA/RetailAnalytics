@@ -1,122 +1,174 @@
 "use client";
 
-import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
-import type { BoxplotCategory } from "@/lib/types";
+import { useLayoutEffect, useRef, useState } from "react";
+import { formatNumber } from "@/lib/constants";
+import type { BoxplotBox } from "@/lib/types";
 
-interface BoxRow {
-  category: string;
-  base: number;
-  box: number;
-  median: number;
-  min: number;
-  max: number;
-  q1: number;
-  q3: number;
+interface HoverState {
+  box: BoxplotBox;
+  x: number;
+  y: number;
 }
 
-interface BoxShapeProps {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  payload?: BoxRow;
-}
+const UNIT_LABELS: Record<string, string> = {
+  "units-per-category": "u",
+  "units-per-customer": "u",
+  "transactions-per-customer": "tx",
+};
 
-function BoxShape({ x = 0, y = 0, width = 0, height = 0, payload }: BoxShapeProps) {
-  if (!payload) return null;
-  const { q1, q3, min: mn, max: mx, median: md } = payload;
-  const yTop = y;
-  const yBot = y + height;
-  const range = q3 - q1 || 1;
-  const yPerUnit = height / range;
-  const yMedian = yBot - (md - q1) * yPerUnit;
-  const yMin = yBot + (q1 - mn) * yPerUnit;
-  const yMax = yTop - (mx - q3) * yPerUnit;
-  const cx = x + width / 2;
+// Self-contained responsive SVG boxplot with optional log scale, so whiskers,
+// box and median are positioned by an explicit scale (Recharts has no native
+// boxplot and its stacked-bar trick can't express a log axis).
+export function Boxplot({
+  data,
+  logScale = false,
+  unit = "u",
+}: {
+  data: BoxplotBox[];
+  logScale?: boolean;
+  unit?: string;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(600);
+  const [hover, setHover] = useState<HoverState | null>(null);
+  const height = 340;
+
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const padTop = 16;
+  const padBottom = 78; // room for rotated labels
+  const padLeft = 44;
+  const padRight = 12;
+  const plotW = Math.max(width - padLeft - padRight, 10);
+  const plotH = height - padTop - padBottom;
+
+  const rawMax = Math.max(...data.map((d) => d.max), 1);
+  // Log scale needs a positive floor; values are counts ≥ 0.
+  const floor = 0.8;
+  const yMin = logScale ? floor : 0;
+  const yMax = logScale ? rawMax * 1.15 : Math.ceil(rawMax * 1.1);
+
+  const scaleY = (v: number) => {
+    if (logScale) {
+      const lv = Math.log10(Math.max(v, floor));
+      const lmin = Math.log10(yMin);
+      const lmax = Math.log10(yMax);
+      const t = (lv - lmin) / (lmax - lmin || 1);
+      return padTop + (1 - t) * plotH;
+    }
+    const t = (v - yMin) / (yMax - yMin || 1);
+    return padTop + (1 - t) * plotH;
+  };
+
+  const n = data.length;
+  const slot = plotW / Math.max(n, 1);
+  const boxW = Math.min(slot * 0.5, 46);
+
+  // Y gridlines / ticks
+  const ticks: number[] = logScale
+    ? [1, 10, 100, 1000, 10000, 100000].filter((t) => t >= yMin && t <= yMax)
+    : Array.from({ length: 5 }, (_, i) => Math.round((yMax / 4) * i));
+
   return (
-    <g>
-      <line x1={cx} y1={yMin} x2={cx} y2={yMax} stroke="#0f766e" strokeWidth="1.2" />
-      <line x1={x + 4} y1={yMin} x2={x + width - 4} y2={yMin} stroke="#0f766e" strokeWidth="1.2" />
-      <line x1={x + 4} y1={yMax} x2={x + width - 4} y2={yMax} stroke="#0f766e" strokeWidth="1.2" />
-      <rect x={x} y={yTop} width={width} height={height} fill="#10b981" fillOpacity="0.18" stroke="#059669" strokeWidth="1.4" rx="2" />
-      <line x1={x} y1={yMedian} x2={x + width} y2={yMedian} stroke="#059669" strokeWidth="2" />
-    </g>
-  );
-}
+    <div ref={wrapRef} className="w-full relative" style={{ height }}>
+      <svg width={width} height={height} className="overflow-visible">
+        {ticks.map((t, i) => {
+          const y = scaleY(t);
+          return (
+            <g key={i}>
+              <line x1={padLeft} y1={y} x2={width - padRight} y2={y} stroke="#e2e8f0" strokeDasharray="3 3" />
+              <text x={padLeft - 8} y={y + 3} textAnchor="end" fontSize={10} fill="#64748b">
+                {t >= 1000 ? `${t / 1000}k` : t}
+              </text>
+            </g>
+          );
+        })}
 
-interface BoxTooltipProps {
-  active?: boolean;
-  payload?: { payload: BoxRow }[];
-}
+        {data.map((d, i) => {
+          const cx = padLeft + slot * i + slot / 2;
+          const x = cx - boxW / 2;
+          const yMinV = scaleY(d.min);
+          const yMaxV = scaleY(d.max);
+          const yQ1 = scaleY(d.q1);
+          const yQ3 = scaleY(d.q3);
+          const yMed = scaleY(d.median);
+          const full = d.label;
+          const short = full.length > 16 ? `${full.slice(0, 15)}…` : full;
+          return (
+            <g
+              key={d.label}
+              onMouseEnter={() => setHover({ box: d, x: cx, y: yMaxV })}
+              onMouseLeave={() => setHover(null)}
+            >
+              {/* whisker */}
+              <line x1={cx} y1={yMinV} x2={cx} y2={yMaxV} stroke="#0f766e" strokeWidth={1.2} />
+              <line x1={cx - boxW / 2 + 4} y1={yMinV} x2={cx + boxW / 2 - 4} y2={yMinV} stroke="#0f766e" strokeWidth={1.2} />
+              <line x1={cx - boxW / 2 + 4} y1={yMaxV} x2={cx + boxW / 2 - 4} y2={yMaxV} stroke="#0f766e" strokeWidth={1.2} />
+              {/* box */}
+              <rect
+                x={x}
+                y={yQ3}
+                width={boxW}
+                height={Math.max(yQ1 - yQ3, 1)}
+                fill="#10b981"
+                fillOpacity={0.18}
+                stroke="#059669"
+                strokeWidth={1.4}
+                rx={2}
+              />
+              {/* median */}
+              <line x1={x} y1={yMed} x2={x + boxW} y2={yMed} stroke="#059669" strokeWidth={2} />
+              {/* hover hit area */}
+              <rect x={cx - slot / 2} y={padTop} width={slot} height={plotH} fill="transparent" />
+              {/* label */}
+              <g transform={`translate(${cx},${height - padBottom + 14})`}>
+                <text textAnchor="end" fontSize={10} fill="#64748b" transform="rotate(-35)">
+                  <title>{full}</title>
+                  {short}
+                </text>
+              </g>
+            </g>
+          );
+        })}
+        {/* axis line */}
+        <line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + plotH} stroke="#e2e8f0" />
+      </svg>
 
-function BoxTooltip({ active, payload }: BoxTooltipProps) {
-  if (!active || !payload || !payload[0]) return null;
-  const d = payload[0].payload;
-  const rows: [string, number][] = [
-    ["Mín", d.min],
-    ["Q1", d.q1],
-    ["Mediana", d.median],
-    ["Q3", d.q3],
-    ["Máx", d.max],
-  ];
-  return (
-    <div className="bg-slate-900 text-white rounded-lg shadow-pop px-3 py-2 text-xs">
-      <div className="font-medium text-slate-200 mb-1">{d.category}</div>
-      {rows.map(([k, v]) => (
-        <div key={k} className="flex items-center justify-between gap-4 tabular-nums">
-          <span className="text-slate-400">{k}</span>
-          <span className="font-semibold">{v} u</span>
+      {hover && (
+        <div
+          className="pointer-events-none absolute z-10 bg-slate-900 text-white rounded-lg shadow-pop px-3 py-2 text-xs -translate-x-1/2"
+          style={{ left: Math.min(Math.max(hover.x, 70), width - 70), top: Math.max(hover.y - 96, 0) }}
+        >
+          <div className="font-medium text-slate-200 mb-1 max-w-[180px] truncate">{hover.box.label}</div>
+          {(
+            [
+              ["Máx", hover.box.max],
+              ["Q3", hover.box.q3],
+              ["Mediana", hover.box.median],
+              ["Q1", hover.box.q1],
+              ["Mín", hover.box.min],
+            ] as [string, number][]
+          ).map(([k, v]) => (
+            <div key={k} className="flex items-center justify-between gap-4 tabular-nums">
+              <span className="text-slate-400">{k}</span>
+              <span className="font-semibold">
+                {formatNumber(v)} {unit}
+              </span>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
 
-interface TickProps {
-  x?: number;
-  y?: number;
-  payload?: { value: string };
-}
-
-function CategoryTick({ x = 0, y = 0, payload }: TickProps) {
-  const full = payload?.value ?? "";
-  const label = full.length > 16 ? `${full.slice(0, 15)}…` : full;
-  return (
-    <g transform={`translate(${x},${y})`}>
-      <text dy={4} dx={-4} textAnchor="end" fontSize={10} fill="#64748b" transform="rotate(-35)">
-        <title>{full}</title>
-        {label}
-      </text>
-    </g>
-  );
-}
-
-export function Boxplot({ data }: { data: BoxplotCategory[] }) {
-  const rows: BoxRow[] = data.map((d) => ({
-    category: d.category,
-    base: d.q1,
-    box: d.q3 - d.q1,
-    median: d.median,
-    min: d.min,
-    max: d.max,
-    q1: d.q1,
-    q3: d.q3,
-  }));
-  const maxVal = Math.max(...data.map((d) => d.max), 1);
-  const domainMax = Math.ceil(maxVal * 1.1);
-
-  return (
-    <div className="h-[340px] w-full">
-      <ResponsiveContainer>
-        <ComposedChart data={rows} margin={{ top: 16, right: 12, left: 8, bottom: 8 }}>
-          <CartesianGrid vertical={false} stroke="#e2e8f0" strokeDasharray="3 3" />
-          <XAxis dataKey="category" tickLine={false} axisLine={{ stroke: "#e2e8f0" }} interval={0} tick={<CategoryTick />} height={72} />
-          <YAxis tickLine={false} axisLine={false} domain={[0, domainMax]} width={32} />
-          <Tooltip content={<BoxTooltip />} cursor={{ fill: "rgba(15,23,42,0.04)" }} />
-          <Bar dataKey="box" stackId="a" shape={<BoxShape />} isAnimationActive={false} legendType="none" />
-          <Bar dataKey="base" stackId="a" fill="transparent" stroke="none" legendType="none" />
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
+export { UNIT_LABELS };

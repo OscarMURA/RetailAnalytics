@@ -1,16 +1,20 @@
 "use client";
 
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 import { ChartTooltip } from "@/components/ui";
 import { MONTHS_ES, formatNumber } from "@/lib/constants";
 import type { Granularity, TimeSeriesPoint } from "@/lib/types";
 
+export type SeriesMetric = "units" | "transactions" | "both";
+
 export function TimeSeriesChart({
   points,
   granularity,
+  metric,
 }: {
   points: TimeSeriesPoint[];
   granularity: Granularity;
+  metric: SeriesMetric;
 }) {
   const fmtDate = (s: string | number) => {
     const d = new Date(`${s}T00:00:00`);
@@ -18,6 +22,9 @@ export function TimeSeriesChart({
     if (granularity === "month") return `${MONTHS_ES[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
     return `${d.getDate()} ${MONTHS_ES[d.getMonth()]}`;
   };
+
+  const showUnits = metric === "units" || metric === "both";
+  const showTx = metric === "transactions" || metric === "both";
 
   return (
     <div className="h-[320px] w-full">
@@ -27,6 +34,10 @@ export function TimeSeriesChart({
             <linearGradient id="areaUnits" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#10b981" stopOpacity={0.35} />
               <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="areaTx" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#6366f1" stopOpacity={0.3} />
+              <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} stroke="#e2e8f0" strokeDasharray="3 3" />
@@ -38,23 +49,50 @@ export function TimeSeriesChart({
             minTickGap={28}
           />
           <YAxis
+            yAxisId="units"
             tickLine={false}
             axisLine={false}
             width={50}
+            hide={!showUnits}
+            tickFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))}
+          />
+          <YAxis
+            yAxisId="tx"
+            orientation="right"
+            tickLine={false}
+            axisLine={false}
+            width={50}
+            hide={!showTx}
             tickFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))}
           />
           <Tooltip
-            content={<ChartTooltip labelFormatter={fmtDate} formatter={(v) => `${formatNumber(v)} u`} />}
+            content={<ChartTooltip labelFormatter={fmtDate} formatter={(v) => formatNumber(v)} />}
           />
-          <Area
-            type="monotone"
-            dataKey="units"
-            name="Unidades"
-            stroke="#059669"
-            strokeWidth={2}
-            fill="url(#areaUnits)"
-            activeDot={{ r: 4, fill: "#059669", stroke: "#fff", strokeWidth: 2 }}
-          />
+          {metric === "both" && <Legend wrapperStyle={{ fontSize: 12 }} />}
+          {showUnits && (
+            <Area
+              yAxisId="units"
+              type="monotone"
+              dataKey="units"
+              name="Unidades"
+              stroke="#059669"
+              strokeWidth={2}
+              fill="url(#areaUnits)"
+              activeDot={{ r: 4, fill: "#059669", stroke: "#fff", strokeWidth: 2 }}
+            />
+          )}
+          {showTx && (
+            <Area
+              yAxisId="tx"
+              type="monotone"
+              dataKey="transactions"
+              name="Transacciones"
+              stroke="#4f46e5"
+              strokeWidth={2}
+              fill="url(#areaTx)"
+              activeDot={{ r: 4, fill: "#4f46e5", stroke: "#fff", strokeWidth: 2 }}
+            />
+          )}
         </AreaChart>
       </ResponsiveContainer>
     </div>

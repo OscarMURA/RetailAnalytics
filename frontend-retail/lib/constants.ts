@@ -45,4 +45,5 @@ export const MONTHS_ES = [
 ];
 
 export const nf = new Intl.NumberFormat("es-CO");
-export const formatNumber = (v: number) => nf.format(v);
+export const formatNumber = (v: number | null | undefined) =>
+  v == null || Number.isNaN(v) ? "—" : nf.format(v);
