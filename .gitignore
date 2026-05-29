@@ -12,6 +12,8 @@ Frontend/
 
 # ── Artefactos de serving / salida del ETL Spark ─────────────────────
 backend/serving/
+backend/lake/
+backend/warehouse/
 backend/spark-warehouse/
 spark-warehouse/
 *.parquet

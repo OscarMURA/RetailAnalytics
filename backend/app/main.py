@@ -1,23 +1,34 @@
-"""RetailAnalytics FastAPI — serves precomputed ETL artifacts.
+"""RetailAnalytics FastAPI — DuckDB over the Parquet warehouse.
 
-No Spark at request time: every endpoint reads a JSON file produced by
-``backend/etl/pipeline.py`` from ``backend/serving/``. Re-running the ETL
-refreshes the artifacts; this layer reloads them per request (cheap, small
-files) so new data shows up without a restart.
+Every data endpoint runs parametrized SQL at request time (no precomputed JSON)
+against the warehouse datasets, so global filters (stores / from / to) recompute
+results live. Re-running the ETL refreshes the Parquet; new queries see it
+without a restart.
+
+Filters (optional, on all data endpoints):
+  stores=102,103   from=YYYY-MM-DD   to=YYYY-MM-DD
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+from datetime import date, timedelta
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-SERVING_DIR = Path(__file__).resolve().parents[1] / "serving"
+from app import db
+from app.filters import Filters, parse_filters
 
-app = FastAPI(title="RetailAnalytics API", version="0.1.0")
+WEEKDAY_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+ICONS = {
+    "totalUnits": "package",
+    "totalTransactions": "activity",
+    "uniqueCustomers": "users",
+    "distinctProducts": "box",
+    "activeStores": "store",
+}
 
+app = FastAPI(title="RetailAnalytics API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -26,21 +37,79 @@ app.add_middleware(
 )
 
 
-def load(name: str):
-    path = SERVING_DIR / f"{name}.json"
-    if not path.exists():
-        raise HTTPException(
-            status_code=503,
-            detail=f"Serving artifact '{name}' missing — run the ETL (backend/etl/run.sh).",
-        )
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+@app.on_event("startup")
+def _limit_threadpool() -> None:
+    # FastAPI runs sync `def` handlers in AnyIO's threadpool. DuckDB's Python
+    # client segfaults the process if touched from multiple threads at once, so
+    # cap the pool to a single worker: all handlers (and thus all DuckDB queries)
+    # run one-at-a-time. Queries are sub-second, so this is fine for the demo.
+    import anyio.to_thread
+
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    limiter.total_tokens = 1
+
+
+def filters_dep(
+    stores: str | None = Query(None, description="csv store ids; absent = all"),
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
+) -> Filters:
+    return parse_filters(stores, date_from, date_to)
+
+
+def _require_warehouse():
+    if not db.warehouse_ready():
+        raise HTTPException(503, "Parquet warehouse missing — run the ETL (backend/etl/run.sh).")
+
+
+# --------------------------------------------------------------------------- #
+# Health / meta                                                                #
+# --------------------------------------------------------------------------- #
 
 
 @app.get("/api/health")
 def health():
-    ready = (SERVING_DIR / "kpis.json").exists()
-    return {"status": "ok" if ready else "no-data", "servingReady": ready}
+    ready = db.warehouse_ready()
+    return {"status": "ok" if ready else "no-data", "warehouseReady": ready}
+
+
+@app.get("/api/meta")
+def meta():
+    _require_warehouse()
+    k = db.query_one("SELECT date_min, date_max FROM overview")
+    stores = [
+        r["store_id"]
+        for r in db.query("SELECT DISTINCT store_id FROM daily_sales ORDER BY store_id")
+    ]
+    return {
+        "stores": stores,
+        "dateMin": k["date_min"].isoformat(),
+        "dateMax": k["date_max"].isoformat(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Helpers                                                                      #
+# --------------------------------------------------------------------------- #
+
+
+def _resolved_range(f: Filters) -> tuple[date, date]:
+    """Effective [min,max] dates given the filters (clipped to data)."""
+    where, params = f.where()
+    row = db.query_one(
+        f"SELECT min(date) AS lo, max(date) AS hi FROM daily_sales{where}", params
+    )
+    if not row or row["lo"] is None:
+        k = db.query_one("SELECT date_min AS lo, date_max AS hi FROM overview")
+        return k["lo"], k["hi"]
+    return row["lo"], row["hi"]
+
+
+def _delta(cur: float, prev: float) -> tuple[float, str]:
+    if prev == 0:
+        return 0.0, "flat"
+    d = round((cur - prev) / prev * 100.0, 1)
+    return d, ("up" if d > 0.05 else "down" if d < -0.05 else "flat")
 
 
 # --------------------------------------------------------------------------- #
@@ -49,44 +118,251 @@ def health():
 
 
 @app.get("/api/summary/kpis")
-def summary_kpis():
-    return load("kpis")
+def summary_kpis(f: Filters = Depends(filters_dep)):
+    _require_warehouse()
+    where, params = f.where()
+
+    if not (f.stores or f.date_from or f.date_to):
+        # No filters → global totals straight from the precomputed overview row.
+        ov = db.query_one(
+            "SELECT total_units, total_transactions, unique_customers, "
+            "distinct_products, active_stores FROM overview"
+        )
+        totals = {"units": ov["total_units"], "transactions": ov["total_transactions"]}
+        customers = ov["unique_customers"]
+        distinct_products = ov["distinct_products"]
+        active_stores = ov["active_stores"]
+    else:
+        totals = db.query_one(
+            f"""SELECT coalesce(sum(units),0) AS units,
+                       coalesce(sum(transactions),0) AS transactions
+                FROM daily_sales{where}""",
+            params,
+        )
+        iwhere, iparams = f.where()
+        customers = db.query_one(
+            f"SELECT count(DISTINCT client) AS c FROM purchases{iwhere}", iparams
+        )["c"]
+        distinct_products = db.query_one(
+            f"SELECT count(DISTINCT product_id) AS c FROM purchases{iwhere}", iparams
+        )["c"]
+        active_stores = db.query_one(
+            f"SELECT count(DISTINCT store_id) AS c FROM daily_sales{where}", params
+        )["c"]
+
+    # Deltas: last 30d vs prior 30d within the resolved range (robust clip).
+    hi = _resolved_range(f)[1]
+    cur_lo = hi - timedelta(days=29)
+    prev_hi = hi - timedelta(days=30)
+    prev_lo = hi - timedelta(days=59)
+
+    def window(lo: date, hi_: date):
+        w, p = f.where()
+        glue = " AND" if w else " WHERE"
+        sd = db.query_one(
+            f"SELECT coalesce(sum(units),0) u, coalesce(sum(transactions),0) t "
+            f"FROM daily_sales{w}{glue} date BETWEEN ? AND ?",
+            p + [lo.isoformat(), hi_.isoformat()],
+        )
+        iw, ip = f.where()
+        iglue = " AND" if iw else " WHERE"
+        cu = db.query_one(
+            f"SELECT count(DISTINCT client) c, count(DISTINCT product_id) pr "
+            f"FROM purchases{iw}{iglue} date BETWEEN ? AND ?",
+            ip + [lo.isoformat(), hi_.isoformat()],
+        )
+        return sd["u"], sd["t"], cu["c"], cu["pr"]
+
+    cu_u, cu_t, cu_c, cu_p = window(cur_lo, hi)
+    pv_u, pv_t, pv_c, pv_p = window(prev_lo, prev_hi)
+
+    def kpi(key, label, value, cur, prev):
+        d, direction = _delta(cur, prev)
+        return {"key": key, "label": label, "value": int(value), "delta": d,
+                "direction": direction, "icon": ICONS[key]}
+
+    return {
+        "kpis": [
+            kpi("totalUnits", "Unidades vendidas", totals["units"], cu_u, pv_u),
+            kpi("totalTransactions", "Transacciones", totals["transactions"], cu_t, pv_t),
+            kpi("uniqueCustomers", "Clientes únicos", customers, cu_c, pv_c),
+            kpi("distinctProducts", "Productos distintos", distinct_products, cu_p, pv_p),
+            kpi("activeStores", "Tiendas activas", active_stores, active_stores, active_stores),
+        ]
+    }
 
 
 @app.get("/api/summary/top-products")
-def summary_top_products(limit: int = Query(10, ge=1, le=50)):
-    return load("top_products")[:limit]
+def summary_top_products(limit: int = Query(10, ge=1, le=50), f: Filters = Depends(filters_dep)):
+    _require_warehouse()
+    where, params = f.where()
+    if not (f.stores or f.date_from or f.date_to):
+        # No filters → precomputed product_catalog (instant).
+        rows = db.query(
+            f"""SELECT product_id, category_name AS category, units, transactions
+                FROM product_catalog ORDER BY units DESC LIMIT {int(limit)}"""
+        )
+    else:
+        rows = db.query(
+            f"""SELECT product_id, any_value(category_name) AS category,
+                       sum(qty) AS units, count(DISTINCT transaction_id) AS transactions
+                FROM purchases{where}
+                GROUP BY product_id ORDER BY units DESC LIMIT {int(limit)}""",
+            params,
+        )
+    return [
+        {"rank": i + 1, "code": r["product_id"], "label": f"Producto {r['product_id']}",
+         "category": r["category"], "units": int(r["units"]),
+         "transactions": int(r["transactions"])}
+        for i, r in enumerate(rows)
+    ]
 
 
 @app.get("/api/summary/top-customers")
-def summary_top_customers(limit: int = Query(10, ge=1, le=50)):
-    return load("top_customers")[:limit]
+def summary_top_customers(
+    limit: int = Query(10, ge=1, le=50),
+    by: str = Query("transactions", pattern="^(transactions|units)$"),
+    f: Filters = Depends(filters_dep),
+):
+    _require_warehouse()
+    where, params = f.where()
+    order = "transactions" if by == "transactions" else "units"
+    if not (f.stores or f.date_from or f.date_to):
+        # No filters → precomputed customer_profiles (instant).
+        rows = db.query(
+            f"""SELECT client_id AS client, units_total AS units,
+                       frequency AS transactions
+                FROM customer_profiles ORDER BY {order} DESC LIMIT {int(limit)}"""
+        )
+    else:
+        rows = db.query(
+            f"""SELECT client, sum(qty) AS units,
+                       count(DISTINCT transaction_id) AS transactions
+                FROM purchases{where}
+                GROUP BY client ORDER BY {order} DESC LIMIT {int(limit)}""",
+            params,
+        )
+    return [
+        {"rank": i + 1, "id": r["client"], "units": int(r["units"]),
+         "transactions": int(r["transactions"])}
+        for i, r in enumerate(rows)
+    ]
 
 
 @app.get("/api/summary/categories")
-def summary_categories():
-    return load("categories")
-
-
-@app.get("/api/summary/calendar")
-def summary_calendar(days: int = Query(90, ge=1, le=365)):
-    data = load("calendar")
-    if days < len(data["days"]):
-        trimmed = data["days"][-days:]
-        peak = max(trimmed, key=lambda d: d["count"])
-        counts = [d["count"] for d in trimmed]
-        data = {
-            **data,
-            "days": trimmed,
-            "peakDay": {"date": peak["date"], "count": peak["count"]},
-            "dailyAvg": round(sum(counts) / len(counts), 1) if counts else 0.0,
-        }
-    return data
+def summary_categories(f: Filters = Depends(filters_dep)):
+    _require_warehouse()
+    where, params = f.where()
+    if not (f.stores or f.date_from or f.date_to):
+        # No filters → precomputed category_breakdown (instant).
+        rows = db.query(
+            """SELECT category_name AS name, units, transactions, customers
+               FROM category_breakdown ORDER BY units DESC"""
+        )
+    else:
+        rows = db.query(
+            f"""SELECT category_name AS name, sum(qty) AS units,
+                       count(DISTINCT transaction_id) AS transactions,
+                       count(DISTINCT client) AS customers
+                FROM purchases{where}
+                GROUP BY category_name ORDER BY units DESC""",
+            params,
+        )
+    total_units = sum(r["units"] for r in rows) or 1
+    items = [
+        {"name": r["name"], "units": int(r["units"]), "transactions": int(r["transactions"]),
+         "customers": int(r["customers"]),
+         "value": round(r["units"] / total_units * 100.0, 1)}
+        for r in rows
+    ]
+    active = len([r for r in rows if r["name"] != "Sin categoría"])
+    total = db.query_one(
+        "SELECT count(*) c FROM category_breakdown WHERE category_id IS NOT NULL"
+    )["c"]
+    return {"items": items, "activeCount": active, "totalCount": int(total)}
 
 
 @app.get("/api/summary/coverage")
-def summary_coverage():
-    return load("coverage")
+def summary_coverage(f: Filters = Depends(filters_dep)):
+    _require_warehouse()
+    where, params = f.where()
+    sd = db.query_one(
+        f"SELECT coalesce(sum(units),0) u, coalesce(sum(transactions),0) t, "
+        f"count(DISTINCT store_id) s FROM daily_sales{where}", params
+    )
+    total_cats = db.query_one(
+        "SELECT count(*) c FROM category_breakdown WHERE category_id IS NOT NULL"
+    )["c"]
+    if not (f.stores or f.date_from or f.date_to):
+        # No filters → product_catalog / category_breakdown (instant).
+        prod = db.query_one("SELECT count(DISTINCT product_id) c FROM product_catalog")["c"]
+        active_cats = total_cats
+    else:
+        iw, ip = f.where()
+        prod = db.query_one(f"SELECT count(DISTINCT product_id) c FROM purchases{iw}", ip)["c"]
+        active_cats = db.query_one(
+            f"SELECT count(DISTINCT category_id) c FROM purchases{iw}"
+            + (" AND" if iw else " WHERE") + " category_id IS NOT NULL", ip
+        )["c"]
+    avg_ticket = round(sd["u"] / sd["t"], 2) if sd["t"] else 0.0
+    return {
+        "activeCategories": int(active_cats),
+        "totalCategories": int(total_cats),
+        "rotatingProducts": int(prod),
+        "activeStores": int(sd["s"]),
+        "avgTicket": avg_ticket,
+    }
+
+
+@app.get("/api/summary/calendar")
+def summary_calendar(days: int = Query(90, ge=1, le=365), f: Filters = Depends(filters_dep)):
+    _require_warehouse()
+    hi = _resolved_range(f)[1]
+    lo = hi - timedelta(days=days - 1)
+    where, params = f.where()
+    glue = " AND" if where else " WHERE"
+    rows = db.query(
+        f"""SELECT date, sum(transactions) AS count
+            FROM daily_sales{where}{glue} date BETWEEN ? AND ?
+            GROUP BY date""",
+        params + [lo.isoformat(), hi.isoformat()],
+    )
+    by_date = {r["date"]: int(r["count"]) for r in rows}
+    seq = []
+    d = lo
+    while d <= hi:
+        seq.append((d, by_date.get(d, 0)))
+        d += timedelta(days=1)
+    counts = [c for _, c in seq]
+    max_count = max(counts) if counts else 0
+    days_out, peak = [], {"date": None, "count": 0}
+    for dd, c in seq:
+        days_out.append({"date": dd.isoformat(), "count": c,
+                         "intensity": round(c / max_count, 3) if max_count else 0.0,
+                         "dow": dd.weekday()})
+        if c > peak["count"]:
+            peak = {"date": dd.isoformat(), "count": c}
+    daily_avg = round(sum(counts) / len(counts), 1) if counts else 0.0
+    cur = [c for dd, c in seq if dd > hi - timedelta(days=30)]
+    prev = [c for dd, c in seq if hi - timedelta(days=60) < dd <= hi - timedelta(days=30)]
+    pct, direction = _delta(sum(cur), sum(prev))
+    top5 = [x["date"] for x in sorted(days_out, key=lambda x: x["count"], reverse=True)[:5]]
+    return {"days": days_out, "peakDay": peak, "dailyAvg": daily_avg,
+            "trend30": {"pct": pct, "direction": direction}, "top5": top5}
+
+
+@app.get("/api/summary/peak-timeseries")
+def summary_peak_timeseries(f: Filters = Depends(filters_dep)):
+    _require_warehouse()
+    where, params = f.where()
+    rows = db.query(
+        f"""SELECT date, sum(transactions) AS transactions
+            FROM daily_sales{where} GROUP BY date ORDER BY date""",
+        params,
+    )
+    points = [{"date": r["date"].isoformat(), "transactions": int(r["transactions"])} for r in rows]
+    top5 = [p["date"] for p in sorted(points, key=lambda p: p["transactions"], reverse=True)[:5]]
+    return {"points": points, "top5": top5}
 
 
 # --------------------------------------------------------------------------- #
@@ -95,20 +371,187 @@ def summary_coverage():
 
 
 @app.get("/api/viz/timeseries")
-def viz_timeseries(granularity: str = Query("day", pattern="^(day|week|month)$")):
-    return load("timeseries")[granularity]
+def viz_timeseries(
+    granularity: str = Query("day", pattern="^(day|week|month)$"),
+    f: Filters = Depends(filters_dep),
+):
+    _require_warehouse()
+    where, params = f.where()
+    if granularity == "day":
+        bucket = "date"
+    elif granularity == "week":
+        bucket = "CAST(date_trunc('week', date) AS DATE)"
+    else:
+        bucket = "CAST(date_trunc('month', date) AS DATE)"
+    rows = db.query(
+        f"""SELECT {bucket} AS bucket, sum(units) AS units, sum(transactions) AS transactions
+            FROM daily_sales{where} GROUP BY bucket ORDER BY bucket""",
+        params,
+    )
+    points = [
+        {"date": r["bucket"].isoformat(), "units": int(r["units"]),
+         "transactions": int(r["transactions"])}
+        for r in rows
+    ]
+    units = [p["units"] for p in points]
+    txns = [p["transactions"] for p in points]
+    n = len(points)
+    return {
+        "total": sum(units),
+        "avg": round(sum(units) / n, 1) if n else 0.0,
+        "peak": max(units) if units else 0,
+        "totalTransactions": sum(txns),
+        "avgTransactions": round(sum(txns) / n, 1) if n else 0.0,
+        "peakTransactions": max(txns) if txns else 0,
+        "points": points,
+    }
 
 
-@app.get("/api/viz/boxplot-categories")
-def viz_boxplot_categories():
-    return load("boxplot_categories")
+@app.get("/api/viz/boxplot")
+def viz_boxplot(
+    dimension: str = Query(
+        "units-per-category",
+        pattern="^(units-per-category|units-per-customer|transactions-per-customer)$",
+    ),
+    f: Filters = Depends(filters_dep),
+):
+    _require_warehouse()
+    where, params = f.where()
+    qs = "[0.0, 0.25, 0.5, 0.75, 1.0]"
+
+    if dimension == "units-per-category":
+        # Units-per-transaction within each category, quantiles for the top 8
+        # categories by total units — one grouped scan instead of N per-category
+        # passes.
+        glue = "AND" if where else "WHERE"
+        rows = db.query(
+            f"""WITH per_tx AS (
+                    SELECT category_name, transaction_id, sum(qty) v
+                    FROM purchases{where} {glue} category_id IS NOT NULL
+                    GROUP BY category_name, transaction_id),
+                 totals AS (
+                    SELECT category_name, sum(v) AS tot FROM per_tx GROUP BY category_name
+                    ORDER BY tot DESC LIMIT 8)
+                SELECT p.category_name AS label,
+                       quantile_cont(p.v, {qs}) AS q, count(*) AS n, avg(p.v) AS m
+                FROM per_tx p JOIN totals t USING (category_name)
+                GROUP BY p.category_name
+                ORDER BY sum(p.v) DESC""",
+            params,
+        )
+        boxes, all_vals = [], []
+        for r in rows:
+            q = r["q"]
+            boxes.append({"label": r["label"], "min": q[0], "q1": q[1], "median": q[2],
+                          "q3": q[3], "max": q[4]})
+            all_vals.append((r["n"], r["m"]))
+        n = sum(v[0] for v in all_vals)
+        mean = round(sum(v[0] * v[1] for v in all_vals) / n, 2) if n else 0.0
+        median = boxes[0]["median"] if boxes else 0
+        return {"dimension": dimension, "boxes": boxes,
+                "stats": {"count": int(n), "mean": mean, "median": median, "p50": median}}
+
+    # per-customer dimensions: a single box over all clients.
+    metric = "sum(qty)" if dimension == "units-per-customer" else "count(DISTINCT transaction_id)"
+    row = db.query_one(
+        f"""WITH per_c AS (
+                SELECT client, {metric} v FROM purchases{where} GROUP BY client)
+            SELECT quantile_cont(v, {qs}) AS q, count(*) n, avg(v) m, median(v) p50 FROM per_c""",
+        params,
+    )
+    label = "Unidades por cliente" if dimension == "units-per-customer" else "Transacciones por cliente"
+    if not row or row["n"] == 0:
+        return {"dimension": dimension, "boxes": [],
+                "stats": {"count": 0, "mean": 0, "median": 0, "p50": 0}}
+    q = row["q"]
+    boxes = [{"label": label, "min": q[0], "q1": q[1], "median": q[2], "q3": q[3], "max": q[4]}]
+    return {"dimension": dimension, "boxes": boxes,
+            "stats": {"count": int(row["n"]), "mean": round(row["m"], 2),
+                      "median": row["p50"], "p50": row["p50"]}}
 
 
 @app.get("/api/viz/weekday-distribution")
-def viz_weekday_distribution():
-    return load("weekday_distribution")
+def viz_weekday_distribution(f: Filters = Depends(filters_dep)):
+    _require_warehouse()
+    where, params = f.where()
+    units = {r["dow"]: int(r["u"]) for r in db.query(
+        f"SELECT dow, sum(qty) u FROM purchases{where} GROUP BY dow", params)}
+    txns = {r["dow"]: int(r["t"]) for r in db.query(
+        f"SELECT dow, count(DISTINCT transaction_id) t FROM purchases{where} GROUP BY dow",
+        params)}
+    return [
+        {"dow": d, "label": WEEKDAY_LABELS[d], "units": units.get(d, 0),
+         "transactions": txns.get(d, 0)}
+        for d in range(7)
+    ]
+
+
+# Feature columns, in the labels' order. Pearson is computed in DuckDB (vectorized
+# corr()), one aggregate over the per-client features.
+_CORR_COLS = ["frequency", "volume", "avg_basket", "distinct_products",
+              "distinct_categories", "recency"]
+# Same six features as exposed by the precomputed `customer_profiles` dataset.
+_CORR_PROFILE_COLS = {
+    "frequency": "frequency", "volume": "units_total", "avg_basket": "avg_basket_size",
+    "distinct_products": "distinct_products", "distinct_categories": "distinct_categories",
+    "recency": "recency_days",
+}
 
 
 @app.get("/api/viz/correlation")
-def viz_correlation():
-    return load("correlation")
+def viz_correlation(f: Filters = Depends(filters_dep)):
+    _require_warehouse()
+    cols = _CORR_COLS
+    n = len(cols)
+
+    # The per-client feature source: precomputed profiles when unfiltered, else
+    # recomputed from purchases under the filter.
+    if not (f.stores or f.date_from or f.date_to):
+        sel = ", ".join(f"{_CORR_PROFILE_COLS[c]} AS {c}" for c in cols)
+        feats_sql = f"SELECT {sel} FROM customer_profiles"
+        feats_params: list = []
+    else:
+        where_i, p_i = f.where()
+        where_t, p_t = f.where()
+        feats_sql = f"""
+            SELECT i.client,
+                   count(DISTINCT i.transaction_id)::DOUBLE AS frequency,
+                   sum(i.qty)::DOUBLE AS volume,
+                   (sum(i.qty)::DOUBLE / count(DISTINCT i.transaction_id)) AS avg_basket,
+                   count(DISTINCT i.product_id)::DOUBLE AS distinct_products,
+                   count(DISTINCT i.category_id)::DOUBLE AS distinct_categories,
+                   date_diff('day', max(i.date),
+                             (SELECT max(date) FROM daily_sales{where_t}))::DOUBLE AS recency
+            FROM purchases i{where_i}
+            GROUP BY i.client"""
+        feats_params = p_i + p_t
+
+    # Pearson via plain SQL sum-aggregates (count, sum, sum-of-squares, sum-of-
+    # products) over the feature set — returns ~30 scalars, never the 158k rows.
+    # DuckDB's native corr() aggregate segfaults on this platform, so we build the
+    # coefficient from these safe primitives instead.
+    pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+    aggs = ["count(*) AS m"]
+    aggs += [f"sum({c}) AS s_{i}" for i, c in enumerate(cols)]
+    aggs += [f"sum({c}*{c}) AS q_{i}" for i, c in enumerate(cols)]
+    aggs += [f"sum({cols[i]}*{cols[j]}) AS p_{i}_{j}" for i, j in pairs]
+    row = db.query_one(f"WITH feats AS ({feats_sql}) SELECT {', '.join(aggs)} FROM feats",
+                       feats_params)
+
+    matrix = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    m = (row or {}).get("m") or 0
+    if m and m > 1:
+        for i, j in pairs:
+            si, sj, pij = row[f"s_{i}"], row[f"s_{j}"], row[f"p_{i}_{j}"]
+            qi, qj = row[f"q_{i}"], row[f"q_{j}"]
+            cov = pij - si * sj / m
+            vi = qi - si * si / m
+            vj = qj - sj * sj / m
+            denom = (vi * vj) ** 0.5
+            c = round(cov / denom, 3) if denom > 0 else 0.0
+            matrix[i][j] = matrix[j][i] = c
+    return {
+        "labels": ["Frecuencia", "Volumen total", "Cant. promedio", "Div. productos",
+                   "Div. categorías", "Recencia"],
+        "matrix": matrix,
+    }
