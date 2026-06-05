@@ -5,7 +5,7 @@ import { formatNumber } from "@/lib/constants";
 import type { BoxplotBox } from "@/lib/types";
 
 interface HoverState {
-  box: BoxplotBox;
+  box: Derived;
   x: number;
   y: number;
 }
@@ -16,9 +16,43 @@ const UNIT_LABELS: Record<string, string> = {
   "transactions-per-customer": "tx",
 };
 
-// Self-contained responsive SVG boxplot with optional log scale, so whiskers,
-// box and median are positioned by an explicit scale (Recharts has no native
-// boxplot and its stacked-bar trick can't express a log axis).
+// Compact axis/marker formatter: 1994000 → "1.99M", 1496 → "1.5k".
+function compact(v: number): string {
+  const a = Math.abs(v);
+  if (a >= 1_000_000) return `${(v / 1_000_000).toFixed(a >= 10_000_000 ? 0 : 2)}M`;
+  if (a >= 1_000) return `${(v / 1_000).toFixed(a >= 10_000 ? 0 : 1)}k`;
+  return `${Math.round(v)}`;
+}
+
+interface Derived extends BoxplotBox {
+  // Tukey whisker caps (1.5×IQR fence, clamped to the actual min/max).
+  whiskLo: number;
+  whiskHi: number;
+  outLo: number | null; // true min when it lies past the lower fence
+  outHi: number | null; // true max when it lies past the upper fence
+}
+
+function derive(b: BoxplotBox): Derived {
+  const iqr = Math.max(b.q3 - b.q1, 0);
+  const upperFence = b.q3 + 1.5 * iqr;
+  const lowerFence = b.q1 - 1.5 * iqr;
+  const whiskHi = Math.min(b.max, upperFence);
+  const whiskLo = Math.max(b.min, lowerFence);
+  return {
+    ...b,
+    whiskHi,
+    whiskLo,
+    outHi: b.max > whiskHi + 1e-6 ? b.max : null,
+    outLo: b.min < whiskLo - 1e-6 ? b.min : null,
+  };
+}
+
+// Self-contained responsive horizontal SVG boxplot. Categories read left-to-right
+// with no rotated labels. Whiskers are capped at the 1.5×IQR (Tukey) fence so a
+// handful of extreme values can't crush the box to an invisible sliver — the true
+// max is surfaced as a labelled outlier marker instead. The log-scale toggle drops
+// the capping and shows the full range, already compressed by the log axis
+// (Recharts has no native boxplot, hence the manual scale).
 export function Boxplot({
   data,
   logScale = false,
@@ -31,7 +65,6 @@ export function Boxplot({
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [hover, setHover] = useState<HoverState | null>(null);
-  const height = 340;
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -44,109 +77,172 @@ export function Boxplot({
     return () => ro.disconnect();
   }, []);
 
-  const padTop = 16;
-  const padBottom = 78; // room for rotated labels
-  const padLeft = 44;
-  const padRight = 12;
-  const plotW = Math.max(width - padLeft - padRight, 10);
-  const plotH = height - padTop - padBottom;
+  const boxes = data.map(derive);
+  const n = boxes.length;
 
-  const rawMax = Math.max(...data.map((d) => d.max), 1);
-  // Log scale needs a positive floor; values are counts ≥ 0.
+  // Row height adapts to count: a single distribution gets a tall, roomy row;
+  // many categories pack tighter.
+  const rowH = n <= 1 ? 110 : n <= 2 ? 90 : n <= 4 ? 70 : 48;
+  const padTop = 14;
+  const padBottom = 34; // x-axis ticks
+  const labelW = Math.max(96, Math.min(170, Math.round(width * 0.34)));
+  const padRight = 16;
+  const plotX = labelW;
+  const plotW = Math.max(width - labelW - padRight, 10);
+  const plotH = rowH * n;
+  const height = padTop + plotH + padBottom;
+
+  // Domain: in linear mode bound by the (global) capped whisker so the boxes stay
+  // legible; outliers beyond it are pinned at the edge. In log mode show everything.
+  const rawMax = Math.max(...boxes.map((d) => d.max), 1);
+  const cappedMax = Math.max(...boxes.map((d) => d.whiskHi), 1);
   const floor = 0.8;
-  const yMin = logScale ? floor : 0;
-  const yMax = logScale ? rawMax * 1.15 : Math.ceil(rawMax * 1.1);
+  const xMin = logScale ? floor : 0;
+  const xMax = logScale ? rawMax * 1.15 : cappedMax * 1.08 || 1;
 
-  const scaleY = (v: number) => {
+  const scaleX = (v: number) => {
+    const clamped = Math.min(Math.max(v, xMin), xMax);
     if (logScale) {
-      const lv = Math.log10(Math.max(v, floor));
-      const lmin = Math.log10(yMin);
-      const lmax = Math.log10(yMax);
+      const lv = Math.log10(Math.max(clamped, floor));
+      const lmin = Math.log10(xMin);
+      const lmax = Math.log10(xMax);
       const t = (lv - lmin) / (lmax - lmin || 1);
-      return padTop + (1 - t) * plotH;
+      return plotX + t * plotW;
     }
-    const t = (v - yMin) / (yMax - yMin || 1);
-    return padTop + (1 - t) * plotH;
+    const t = (clamped - xMin) / (xMax - xMin || 1);
+    return plotX + t * plotW;
   };
 
-  const n = data.length;
-  const slot = plotW / Math.max(n, 1);
-  const boxW = Math.min(slot * 0.5, 46);
-
-  // Y gridlines / ticks
   const ticks: number[] = logScale
-    ? [1, 10, 100, 1000, 10000, 100000].filter((t) => t >= yMin && t <= yMax)
-    : Array.from({ length: 5 }, (_, i) => Math.round((yMax / 4) * i));
+    ? [1, 10, 100, 1000, 10000, 100000, 1000000].filter((t) => t >= xMin && t <= xMax)
+    : Array.from({ length: 5 }, (_, i) => (xMax / 4) * i);
+
+  const boxH = Math.min(rowH * 0.46, 30);
+  const capH = boxH * 0.62;
 
   return (
     <div ref={wrapRef} className="w-full relative" style={{ height }}>
       <svg width={width} height={height} className="overflow-visible">
+        {/* vertical gridlines + x ticks */}
         {ticks.map((t, i) => {
-          const y = scaleY(t);
+          const x = scaleX(t);
           return (
-            <g key={i}>
-              <line x1={padLeft} y1={y} x2={width - padRight} y2={y} stroke="#e2e8f0" strokeDasharray="3 3" />
-              <text x={padLeft - 8} y={y + 3} textAnchor="end" fontSize={10} fill="#64748b">
-                {t >= 1000 ? `${t / 1000}k` : t}
+            <g key={`t${i}`}>
+              <line x1={x} y1={padTop} x2={x} y2={padTop + plotH} stroke="#e2e8f0" strokeDasharray="3 3" />
+              <text x={x} y={padTop + plotH + 16} textAnchor="middle" fontSize={10} fill="#64748b">
+                {compact(t)}
               </text>
             </g>
           );
         })}
 
-        {data.map((d, i) => {
-          const cx = padLeft + slot * i + slot / 2;
-          const x = cx - boxW / 2;
-          const yMinV = scaleY(d.min);
-          const yMaxV = scaleY(d.max);
-          const yQ1 = scaleY(d.q1);
-          const yQ3 = scaleY(d.q3);
-          const yMed = scaleY(d.median);
+        {boxes.map((d, i) => {
+          const cy = padTop + rowH * i + rowH / 2;
+          // Log scale shows the true min/max (it already compresses extremes);
+          // linear scale caps the whisker at the Tukey fence and flags outliers.
+          const xLo = scaleX(logScale ? d.min : d.whiskLo);
+          const xHi = scaleX(logScale ? d.max : d.whiskHi);
+          const xQ1 = scaleX(d.q1);
+          const xQ3 = scaleX(d.q3);
+          const xMed = scaleX(d.median);
+          const boxLeft = Math.min(xQ1, xQ3);
+          const boxRight = Math.max(xQ1, xQ3);
           const full = d.label;
-          const short = full.length > 16 ? `${full.slice(0, 15)}…` : full;
+          const maxChars = Math.floor((labelW - 14) / 6.2);
+          const short = full.length > maxChars ? `${full.slice(0, maxChars - 1)}…` : full;
+          const active = hover?.box.label === d.label;
           return (
             <g
               key={d.label}
-              onMouseEnter={() => setHover({ box: d, x: cx, y: yMaxV })}
+              onMouseEnter={() => setHover({ box: d, x: (boxLeft + boxRight) / 2, y: cy })}
               onMouseLeave={() => setHover(null)}
             >
-              {/* whisker */}
-              <line x1={cx} y1={yMinV} x2={cx} y2={yMaxV} stroke="#0f766e" strokeWidth={1.2} />
-              <line x1={cx - boxW / 2 + 4} y1={yMinV} x2={cx + boxW / 2 - 4} y2={yMinV} stroke="#0f766e" strokeWidth={1.2} />
-              <line x1={cx - boxW / 2 + 4} y1={yMaxV} x2={cx + boxW / 2 - 4} y2={yMaxV} stroke="#0f766e" strokeWidth={1.2} />
-              {/* box */}
+              {/* full-row hover band */}
               <rect
-                x={x}
-                y={yQ3}
-                width={boxW}
-                height={Math.max(yQ1 - yQ3, 1)}
+                x={plotX}
+                y={cy - rowH / 2}
+                width={plotW}
+                height={rowH}
+                fill={active ? "#10b981" : "transparent"}
+                fillOpacity={active ? 0.05 : 0}
+              />
+              {/* category label */}
+              <text x={labelW - 12} y={cy + 3.5} textAnchor="end" fontSize={11} fill="#475569" fontWeight={500}>
+                <title>{full}</title>
+                {short}
+              </text>
+
+              {/* whisker line + caps */}
+              <line x1={xLo} y1={cy} x2={xHi} y2={cy} stroke="#0f766e" strokeWidth={1.3} />
+              <line x1={xLo} y1={cy - capH / 2} x2={xLo} y2={cy + capH / 2} stroke="#0f766e" strokeWidth={1.3} />
+              <line x1={xHi} y1={cy - capH / 2} x2={xHi} y2={cy + capH / 2} stroke="#0f766e" strokeWidth={1.3} />
+
+              {/* box (Q1 → Q3) */}
+              <rect
+                x={boxLeft}
+                y={cy - boxH / 2}
+                width={Math.max(boxRight - boxLeft, 2)}
+                height={boxH}
                 fill="#10b981"
-                fillOpacity={0.18}
+                fillOpacity={active ? 0.28 : 0.18}
                 stroke="#059669"
                 strokeWidth={1.4}
-                rx={2}
+                rx={3}
               />
               {/* median */}
-              <line x1={x} y1={yMed} x2={x + boxW} y2={yMed} stroke="#059669" strokeWidth={2} />
-              {/* hover hit area */}
-              <rect x={cx - slot / 2} y={padTop} width={slot} height={plotH} fill="transparent" />
-              {/* label */}
-              <g transform={`translate(${cx},${height - padBottom + 14})`}>
-                <text textAnchor="end" fontSize={10} fill="#64748b" transform="rotate(-35)">
-                  <title>{full}</title>
-                  {short}
-                </text>
-              </g>
+              <line x1={xMed} y1={cy - boxH / 2} x2={xMed} y2={cy + boxH / 2} stroke="#047857" strokeWidth={2.4} />
+
+              {/* upper outlier (true max past the fence) */}
+              {!logScale && d.outHi != null && (
+                <g>
+                  <line
+                    x1={xHi}
+                    y1={cy}
+                    x2={plotX + plotW - 9}
+                    y2={cy}
+                    stroke="#f59e0b"
+                    strokeWidth={1.1}
+                    strokeDasharray="2 3"
+                  />
+                  <path
+                    d={`M ${plotX + plotW - 4} ${cy} l -5 -5 l -5 5 l 5 5 z`}
+                    fill="#f59e0b"
+                    stroke="#d97706"
+                    strokeWidth={0.8}
+                  />
+                  <text
+                    x={plotX + plotW - 14}
+                    y={cy - boxH / 2 - 3}
+                    textAnchor="end"
+                    fontSize={9.5}
+                    fill="#b45309"
+                    fontWeight={600}
+                  >
+                    máx {compact(d.outHi)}
+                  </text>
+                </g>
+              )}
+              {/* lower outlier (rare, but honest) */}
+              {!logScale && d.outLo != null && (
+                <path
+                  d={`M ${plotX + 4} ${cy} l 5 -5 l 5 5 l -5 5 z`}
+                  fill="#f59e0b"
+                  stroke="#d97706"
+                  strokeWidth={0.8}
+                />
+              )}
             </g>
           );
         })}
-        {/* axis line */}
-        <line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + plotH} stroke="#e2e8f0" />
+
+        {/* y axis line */}
+        <line x1={plotX} y1={padTop} x2={plotX} y2={padTop + plotH} stroke="#e2e8f0" />
       </svg>
 
       {hover && (
         <div
           className="pointer-events-none absolute z-10 bg-slate-900 text-white rounded-lg shadow-pop px-3 py-2 text-xs -translate-x-1/2"
-          style={{ left: Math.min(Math.max(hover.x, 70), width - 70), top: Math.max(hover.y - 96, 0) }}
+          style={{ left: Math.min(Math.max(hover.x, 90), width - 90), top: Math.max(hover.y - 118, 0) }}
         >
           <div className="font-medium text-slate-200 mb-1 max-w-[180px] truncate">{hover.box.label}</div>
           {(
@@ -165,6 +261,11 @@ export function Boxplot({
               </span>
             </div>
           ))}
+          {!logScale && hover.box.outHi != null && (
+            <div className="mt-1 pt-1 border-t border-slate-700 text-[10px] text-amber-300">
+              Máx atípico · bigote acotado a {compact(hover.box.whiskHi)} {unit}
+            </div>
+          )}
         </div>
       )}
     </div>
