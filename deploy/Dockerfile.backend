@@ -1,0 +1,22 @@
+# RetailAnalytics backend (FastAPI + DuckDB). Spark runs on Dataproc Serverless,
+# so this image is lean — NO pyspark/Java. It serves a local copy of the
+# warehouse synced from GCS and submits jobs to Dataproc.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    "fastapi>=0.115" \
+    "uvicorn[standard]>=0.32" \
+    "duckdb>=1.1" \
+    "numpy>=1.26" \
+    "google-cloud-storage>=2.18" \
+    "google-cloud-dataproc>=5.13"
+
+COPY backend/app ./app
+COPY backend/etl ./etl
+
+ENV PYTHONUNBUFFERED=1
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

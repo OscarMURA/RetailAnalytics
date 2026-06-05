@@ -1,16 +1,20 @@
 """Async Spark job manager (recompute models / re-ingest dataset).
 
-Runs ONE heavy Spark job at a time as a detached subprocess and exposes its
-state for polling. Two job kinds share the same single-flight + cooldown:
+Runs ONE heavy Spark job at a time and exposes its state for polling. Two job
+kinds share the same single-flight + cooldown:
 
-* ``recompute`` — re-run the K-Means + association-rule builders from the
-  already-curated Parquet (fast-ish: skips extract/clean).
-* ``reingest``  — run the FULL ETL (extract → clean → all builders) from the
-  raw dataset, regenerating the whole warehouse. The dataset path defaults to
-  the local ``DataSet/`` but can point at a bucket via ``DATASET_INPUT_DIR``.
+* ``recompute`` — re-run the K-Means + association-rule builders.
+* ``reingest``  — run the FULL ETL from the raw dataset.
 
-Resilience policies:
-* **single-flight** — only one job (of either kind) at a time (409 otherwise).
+Two execution backends, chosen by the ``JOB_BACKEND`` env var:
+
+* ``local``    — a detached local Spark subprocess (dev; default).
+* ``dataproc`` — a Dataproc Serverless batch that reads/writes the GCS
+  warehouse; on success the warehouse is synced down to the local copy DuckDB
+  serves (cloud deployment).
+
+Resilience policies (both backends):
+* **single-flight** — only one job at a time (409 otherwise).
 * **cooldown rate limit** — a new job is rejected (429 + Retry-After) until
   ``COOLDOWN_S`` seconds have elapsed since the previous one finished.
 """
@@ -22,18 +26,17 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
 LOG_PATH = BACKEND_DIR / "warehouse" / ".recompute.log"
 
-# Minimum gap between the END of one job and the START of the next.
+JOB_BACKEND = os.environ.get("JOB_BACKEND", "local")
 COOLDOWN_S = 30.0
 
-# Cap Spark's footprint so the live API keeps responding while a job runs.
-# Leave ~half the cores (min 1) free for uvicorn.
+# Local-Spark footprint cap (so a local job does not starve the API).
 _CORES = os.cpu_count() or 4
 _SPARK_CORES = max(1, _CORES // 2)
 _JOB_ENV = {
@@ -48,11 +51,12 @@ LABELS = {
     "reingest": "Reingesta del dataset (ETL completo)",
 }
 
+_RUNNING_BATCH_STATES = {"PENDING", "RUNNING", "STATE_UNSPECIFIED"}
+
 
 def _command(kind: str) -> list[str]:
     if kind == "recompute":
         return [PYTHON, "-m", "etl.recompute", "--target", "all"]
-    # Full ETL. Honor a configurable dataset path (e.g. a mounted bucket).
     cmd = [PYTHON, "-m", "etl.pipeline"]
     dataset = os.environ.get("DATASET_INPUT_DIR")
     if dataset:
@@ -61,8 +65,13 @@ def _command(kind: str) -> list[str]:
 
 
 class _State:
+    # local
     proc: subprocess.Popen[bytes] | None = None
     log_file: Any = None
+    # dataproc
+    batch_name: str | None = None
+    syncing: bool = False
+    # shared
     kind: str | None = None
     status: str = "idle"  # idle | running | done | error
     started_at: float | None = None
@@ -83,29 +92,68 @@ def _tail_log(limit: int = 1500) -> str:
         return "El proceso falló (sin log disponible)."
 
 
-def _poll_locked() -> None:
-    """Refresh state from the subprocess return code. Call holding _lock."""
-    if _state.proc is None:
-        return
-    rc = _state.proc.poll()
-    if rc is None:
-        _state.status = "running"
-        return
-    if _state.log_file is not None:
-        try:
-            _state.log_file.close()
-        except OSError:
-            pass
-        _state.log_file = None
+def _mark_done(rc_ok: bool, error: str | None) -> None:
     _state.finished_at = time.time()
     _state.last_completed_at = time.monotonic()
-    if rc == 0:
-        _state.status = "done"
-        _state.error = None
-    else:
-        _state.status = "error"
-        _state.error = _tail_log()
+    _state.status = "done" if rc_ok else "error"
+    _state.error = None if rc_ok else error
     _state.proc = None
+    _state.batch_name = None
+    _state.syncing = False
+
+
+def _finish_sync_bg() -> None:
+    """Background: pull the fresh GCS warehouse to local, then mark done."""
+    from app import cloud
+
+    try:
+        cloud.sync_warehouse()
+        with _lock:
+            _mark_done(True, None)
+    except Exception as exc:  # noqa: BLE001 — surface any sync failure to the UI
+        with _lock:
+            _mark_done(False, f"Warehouse sync falló: {exc}")
+
+
+def _poll_locked() -> None:
+    """Refresh state from the running job. Call holding _lock."""
+    # Local subprocess.
+    if _state.proc is not None:
+        rc = _state.proc.poll()
+        if rc is None:
+            _state.status = "running"
+            return
+        if _state.log_file is not None:
+            try:
+                _state.log_file.close()
+            except OSError:
+                pass
+            _state.log_file = None
+        _mark_done(rc == 0, None if rc == 0 else _tail_log())
+        return
+
+    # Dataproc Serverless batch.
+    if _state.batch_name is not None:
+        if _state.syncing:
+            _state.status = "running"  # batch done, warehouse sync in progress
+            return
+        from app import cloud
+
+        try:
+            batch_state, message = cloud.get_batch_state(_state.batch_name)
+        except Exception:  # noqa: BLE001 — transient API error; stay running, retry next poll
+            _state.status = "running"
+            return
+        if batch_state in _RUNNING_BATCH_STATES:
+            _state.status = "running"
+            return
+        if batch_state == "SUCCEEDED":
+            _state.syncing = True
+            _state.status = "running"
+            Thread(target=_finish_sync_bg, daemon=True).start()
+            return
+        _mark_done(False, message or f"Batch en estado {batch_state}.")
+        return
 
 
 def _retry_after_locked() -> float:
@@ -130,6 +178,7 @@ def status() -> dict:
             "running": running,
             "kind": _state.kind,
             "label": LABELS.get(_state.kind or "", ""),
+            "backend": JOB_BACKEND,
             "error": _state.error,
             "startedAt": _state.started_at,
             "finishedAt": _state.finished_at,
@@ -140,8 +189,28 @@ def status() -> dict:
         }
 
 
+def _start_local(kind: str) -> None:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_file = open(LOG_PATH, "wb")
+    _state.proc = subprocess.Popen(
+        _command(kind),
+        cwd=str(BACKEND_DIR),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=_JOB_ENV,
+    )
+    _state.log_file = log_file
+
+
+def _start_dataproc(kind: str) -> None:
+    from app import cloud
+
+    _state.batch_name = cloud.submit_batch(kind)
+    _state.syncing = False
+
+
 def start(kind: str = "recompute") -> dict:
-    """Try to launch a Spark job. Returns {ok, code, reason?, retryAfter?}."""
+    """Try to launch a job. Returns {ok, code, reason?, retryAfter?}."""
     if kind not in LABELS:
         return {"ok": False, "code": 400, "reason": f"Tipo de job inválido: {kind}."}
     with _lock:
@@ -157,16 +226,13 @@ def start(kind: str = "recompute") -> dict:
                 "reason": f"Espera {int(retry_after) + 1}s antes de ejecutar otro proceso.",
                 "retryAfter": retry_after,
             }
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        log_file = open(LOG_PATH, "wb")
-        _state.proc = subprocess.Popen(
-            _command(kind),
-            cwd=str(BACKEND_DIR),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            env=_JOB_ENV,
-        )
-        _state.log_file = log_file
+        try:
+            if JOB_BACKEND == "dataproc":
+                _start_dataproc(kind)
+            else:
+                _start_local(kind)
+        except Exception as exc:  # noqa: BLE001 — report a clean failure to the UI
+            return {"ok": False, "code": 500, "reason": f"No se pudo lanzar el job: {exc}"}
         _state.kind = kind
         _state.status = "running"
         _state.started_at = time.time()

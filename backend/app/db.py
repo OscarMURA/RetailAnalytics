@@ -15,13 +15,16 @@ picked up by new queries without a restart.
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import duckdb
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-WAREHOUSE = BACKEND_DIR / "warehouse"
+# Local Parquet warehouse DuckDB serves. In the cloud deployment this is a local
+# copy synced from the GCS warehouse (see app/cloud.py).
+WAREHOUSE = Path(os.environ.get("LOCAL_WAREHOUSE", str(BACKEND_DIR / "warehouse")))
 
 _DATASETS = [
     "purchases",

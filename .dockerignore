@@ -1,0 +1,13 @@
+# Keep Docker build contexts small — exclude heavy / local-only dirs.
+**/node_modules
+**/.next
+**/__pycache__
+backend/.venv
+backend/warehouse
+DataSet
+Frontend
+.git
+.playwright-mcp
+reports
+*.pdf
+*.png

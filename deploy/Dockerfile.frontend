@@ -1,0 +1,18 @@
+# RetailAnalytics frontend (Next.js). NEXT_PUBLIC_API_URL is baked at build time.
+FROM node:20-slim AS build
+
+WORKDIR /app
+COPY frontend-retail/package.json frontend-retail/package-lock.json ./
+RUN npm ci
+
+COPY frontend-retail/ ./
+# Drop local env so the build uses the API URL passed as a build arg.
+RUN rm -f .env.local .env.development.local
+
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+EXPOSE 3000
+CMD ["npm", "start"]

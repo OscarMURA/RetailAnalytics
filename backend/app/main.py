@@ -11,6 +11,7 @@ Filters (optional, on all data endpoints):
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import date, timedelta
 
@@ -29,10 +30,19 @@ ICONS = {
     "activeStores": "store",
 }
 
+_DEFAULT_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+# Extra origins (e.g. the deployed frontend domain) via CORS_ORIGINS=a,b,c.
+_EXTRA_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+
 app = FastAPI(title="RetailAnalytics API", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
+    allow_origins=_DEFAULT_ORIGINS + _EXTRA_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
     expose_headers=["Retry-After"],
@@ -49,6 +59,26 @@ def _limit_threadpool() -> None:
 
     limiter = anyio.to_thread.current_default_thread_limiter()
     limiter.total_tokens = 1
+
+
+@app.on_event("startup")
+def _cloud_bootstrap() -> None:
+    # In the cloud deployment, pull the GCS warehouse to the local copy DuckDB
+    # serves and push the current ETL code to the staging bucket for Dataproc.
+    if os.environ.get("JOB_BACKEND") != "dataproc":
+        return
+    from app import cloud
+
+    try:
+        n = cloud.sync_warehouse()
+        print(f"[startup] synced {n} warehouse files from {cloud.WAREHOUSE_URI}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[startup] WARNING: warehouse sync failed: {exc}")
+    try:
+        cloud.upload_job_artifacts()
+        print("[startup] uploaded Dataproc job artifacts")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[startup] WARNING: job artifact upload failed: {exc}")
 
 
 def filters_dep(

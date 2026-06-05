@@ -1,0 +1,52 @@
+# RetailAnalytics deployment: Nginx Proxy Manager + backend + frontend.
+# Run from the repo root on the VM:  docker compose -f deploy/docker-compose.yml up -d --build
+#
+# NPM reaches the app over the compose network by service name (backend:8000,
+# frontend:3000). Configure two proxy hosts in NPM (port 81):
+#   retailanalytics.icesi.tech -> frontend:3000
+#   apiretail.icesi.tech       -> backend:8000
+
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "81:81"
+    volumes:
+      - npm-data:/data
+      - npm-letsencrypt:/etc/letsencrypt
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      RETAIL_INPUT: gs://proyectopredatos-retail-data/dataset
+      RETAIL_WAREHOUSE: gs://proyectopredatos-retail-data/warehouse
+      LOCAL_WAREHOUSE: /app/warehouse
+      JOB_BACKEND: dataproc
+      GCP_PROJECT: proyectopredatos
+      GCP_REGION: us-central1
+      DATAPROC_STAGING: proyectopredatos-dataproc-staging
+      DATAPROC_SA: retail-sa@proyectopredatos.iam.gserviceaccount.com
+      DATAPROC_VERSION: "2.2"
+      CORS_ORIGINS: https://retailanalytics.icesi.tech
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_API_URL: https://apiretail.icesi.tech
+    restart: unless-stopped
+    expose:
+      - "3000"
+
+volumes:
+  npm-data:
+  npm-letsencrypt:
