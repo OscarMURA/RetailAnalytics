@@ -28,10 +28,10 @@ ICONS = {
     "activeStores": "store",
 }
 
-app = FastAPI(title="RetailAnalytics API", version="0.2.0")
+app = FastAPI(title="RetailAnalytics API", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
     allow_methods=["GET"],
     allow_headers=["*"],
 )
@@ -110,6 +110,11 @@ def _delta(cur: float, prev: float) -> tuple[float, str]:
         return 0.0, "flat"
     d = round((cur - prev) / prev * 100.0, 1)
     return d, ("up" if d > 0.05 else "down" if d < -0.05 else "flat")
+
+
+def _product_label(product_id: str, product_name: str | None) -> str:
+    cleaned = product_name.strip() if isinstance(product_name, str) else ""
+    return cleaned or f"Producto {product_id}"
 
 
 # --------------------------------------------------------------------------- #
@@ -199,20 +204,20 @@ def summary_top_products(limit: int = Query(10, ge=1, le=50), f: Filters = Depen
     if not (f.stores or f.date_from or f.date_to):
         # No filters → precomputed product_catalog (instant).
         rows = db.query(
-            f"""SELECT product_id, category_name AS category, units, transactions
+            f"""SELECT product_id, product_name, category_name AS category, units, transactions
                 FROM product_catalog ORDER BY units DESC LIMIT {int(limit)}"""
         )
     else:
         rows = db.query(
-            f"""SELECT product_id, any_value(category_name) AS category,
+            f"""SELECT product_id, any_value(product_name) AS product_name, any_value(category_name) AS category,
                        sum(qty) AS units, count(DISTINCT transaction_id) AS transactions
                 FROM purchases{where}
                 GROUP BY product_id ORDER BY units DESC LIMIT {int(limit)}""",
             params,
         )
     return [
-        {"rank": i + 1, "code": r["product_id"], "label": f"Producto {r['product_id']}",
-         "category": r["category"], "units": int(r["units"]),
+        {"rank": i + 1, "code": r["product_id"], "label": _product_label(r["product_id"], r.get("product_name")),
+         "productName": r.get("product_name"), "category": r["category"], "units": int(r["units"]),
          "transactions": int(r["transactions"])}
         for i, r in enumerate(rows)
     ]
@@ -554,4 +559,261 @@ def viz_correlation(f: Filters = Depends(filters_dep)):
         "labels": ["Frecuencia", "Volumen total", "Cant. promedio", "Div. productos",
                    "Div. categorías", "Recencia"],
         "matrix": matrix,
+    }
+
+# --------------------------------------------------------------------------- #
+# Análisis Avanzado: Segmentación + Recomendador                              #
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/api/advanced/segments")
+def advanced_segments(points_per_segment: int = Query(120, ge=20, le=300)):
+    _require_warehouse()
+    summaries = db.query(
+        """SELECT segment_id, segment_name, customers, share_pct,
+                  avg_frequency, avg_units_total, avg_distinct_products,
+                  avg_distinct_categories, avg_basket_size, avg_recency_days,
+                  description
+           FROM segment_summary ORDER BY segment_id"""
+    )
+    points = db.query(
+        """SELECT client_id, segment_id, segment_name, frequency, units_total,
+                  distinct_products, distinct_categories, avg_basket_size, recency_days
+           FROM (
+             SELECT *, row_number() OVER (
+                 PARTITION BY segment_id ORDER BY units_total DESC, frequency DESC, client_id
+             ) AS rn
+             FROM customer_segments
+           ) s
+           WHERE rn <= ?
+           ORDER BY segment_id, units_total DESC""",
+        [points_per_segment],
+    )
+    return {
+        "segments": [
+            {
+                "segmentId": int(r["segment_id"]),
+                "name": r["segment_name"],
+                "customers": int(r["customers"]),
+                "sharePct": round(float(r["share_pct"]), 2),
+                "avgFrequency": round(float(r["avg_frequency"]), 2),
+                "avgUnitsTotal": round(float(r["avg_units_total"]), 2),
+                "avgDistinctProducts": round(float(r["avg_distinct_products"]), 2),
+                "avgDistinctCategories": round(float(r["avg_distinct_categories"]), 2),
+                "avgBasketSize": round(float(r["avg_basket_size"]), 2),
+                "avgRecencyDays": round(float(r["avg_recency_days"]), 2),
+                "description": r["description"],
+            }
+            for r in summaries
+        ],
+        "points": [
+            {
+                "clientId": r["client_id"],
+                "segmentId": int(r["segment_id"]),
+                "segmentName": r["segment_name"],
+                "frequency": int(r["frequency"]),
+                "unitsTotal": int(r["units_total"]),
+                "distinctProducts": int(r["distinct_products"]),
+                "distinctCategories": int(r["distinct_categories"]),
+                "avgBasketSize": round(float(r["avg_basket_size"]), 2),
+                "recencyDays": int(r["recency_days"]),
+            }
+            for r in points
+        ],
+    }
+
+
+@app.get("/api/advanced/segments/customers")
+def advanced_segment_customers(
+    segment_id: int | None = Query(None, ge=1, le=4),
+    limit: int = Query(25, ge=1, le=100),
+):
+    _require_warehouse()
+    if segment_id is None:
+        rows = db.query(
+            f"""SELECT client_id, segment_id, segment_name, frequency, units_total,
+                       distinct_products, distinct_categories, avg_basket_size, recency_days
+                FROM customer_segments
+                ORDER BY units_total DESC, frequency DESC LIMIT {int(limit)}"""
+        )
+    else:
+        rows = db.query(
+            f"""SELECT client_id, segment_id, segment_name, frequency, units_total,
+                       distinct_products, distinct_categories, avg_basket_size, recency_days
+                FROM customer_segments
+                WHERE segment_id = ?
+                ORDER BY units_total DESC, frequency DESC LIMIT {int(limit)}""",
+            [segment_id],
+        )
+    return [
+        {
+            "clientId": r["client_id"],
+            "segmentId": int(r["segment_id"]),
+            "segmentName": r["segment_name"],
+            "frequency": int(r["frequency"]),
+            "unitsTotal": int(r["units_total"]),
+            "distinctProducts": int(r["distinct_products"]),
+            "distinctCategories": int(r["distinct_categories"]),
+            "avgBasketSize": round(float(r["avg_basket_size"]), 2),
+            "recencyDays": int(r["recency_days"]),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/advanced/recommendations/seeds")
+def advanced_recommendation_seeds(limit: int = Query(20, ge=5, le=50)):
+    _require_warehouse()
+    products = db.query(
+        f"""SELECT product_id, product_name, category_name, units, transactions
+            FROM product_catalog ORDER BY units DESC LIMIT {int(limit)}"""
+    )
+    customers = db.query(
+        f"""SELECT client_id, segment_id, segment_name, frequency, units_total
+            FROM customer_segments ORDER BY units_total DESC, frequency DESC LIMIT {int(limit)}"""
+    )
+    return {
+        "products": [
+            {
+                "code": r["product_id"],
+                "label": _product_label(r["product_id"], r.get("product_name")),
+                "productName": r.get("product_name"),
+                "category": r["category_name"],
+                "units": int(r["units"]),
+                "transactions": int(r["transactions"]),
+            }
+            for r in products
+        ],
+        "customers": [
+            {
+                "clientId": r["client_id"],
+                "segmentId": int(r["segment_id"]),
+                "segmentName": r["segment_name"],
+                "frequency": int(r["frequency"]),
+                "unitsTotal": int(r["units_total"]),
+            }
+            for r in customers
+        ],
+    }
+
+
+@app.get("/api/advanced/recommendations/products")
+def advanced_product_recommendations(
+    product_id: str | None = Query(None),
+    limit: int = Query(8, ge=1, le=20),
+):
+    _require_warehouse()
+    seed = product_id
+    if not seed:
+        top = db.query_one("SELECT product_id FROM product_catalog ORDER BY units DESC LIMIT 1")
+        seed = top["product_id"] if top else None
+    if not seed:
+        return {"seed": None, "items": []}
+
+    seed_row = db.query_one(
+        """SELECT product_id, product_name, category_name, units, transactions
+           FROM product_catalog WHERE product_id = ?""",
+        [seed],
+    )
+    rows = db.query(
+        f"""SELECT recommended_product_id, recommended_product_name, recommended_category, recommended_units,
+                   cooccurrences, confidence, lift, score, rank
+            FROM product_recommendations
+            WHERE antecedent_product_id = ?
+            ORDER BY rank LIMIT {int(limit)}""",
+        [seed],
+    )
+    return {
+        "seed": None if not seed_row else {
+            "code": seed_row["product_id"],
+            "label": _product_label(seed_row["product_id"], seed_row.get("product_name")),
+            "productName": seed_row.get("product_name"),
+            "category": seed_row["category_name"],
+            "units": int(seed_row["units"]),
+            "transactions": int(seed_row["transactions"]),
+        },
+        "items": [
+            {
+                "rank": int(r["rank"]),
+                "code": r["recommended_product_id"],
+                "label": _product_label(r["recommended_product_id"], r.get("recommended_product_name")),
+                "productName": r.get("recommended_product_name"),
+                "category": r["recommended_category"],
+                "units": int(r["recommended_units"]),
+                "cooccurrences": int(r["cooccurrences"]),
+                "confidence": round(float(r["confidence"]), 4),
+                "lift": round(float(r["lift"]), 4),
+                "score": round(float(r["score"]), 4),
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/api/advanced/recommendations/customers")
+def advanced_customer_recommendations(
+    client_id: str | None = Query(None),
+    limit: int = Query(8, ge=1, le=20),
+):
+    _require_warehouse()
+    client = client_id
+    if not client:
+        top = db.query_one("SELECT client_id FROM customer_segments ORDER BY units_total DESC LIMIT 1")
+        client = top["client_id"] if top else None
+    if not client:
+        return {"customer": None, "items": []}
+
+    customer = db.query_one(
+        """SELECT client_id, segment_id, segment_name, frequency, units_total,
+                  distinct_products, distinct_categories
+           FROM customer_segments WHERE client_id = ?""",
+        [client],
+    )
+    rows = db.query(
+        f"""WITH owned AS (
+                SELECT product_id FROM customer_product_history WHERE client = ?
+             ), candidates AS (
+                SELECT pr.recommended_product_id, pr.recommended_product_name, pr.recommended_category,
+                       pr.recommended_units, pr.antecedent_product_id,
+                       pr.cooccurrences, pr.confidence, pr.lift, pr.score
+                FROM owned o
+                JOIN product_recommendations pr ON pr.antecedent_product_id = o.product_id
+                LEFT JOIN owned already ON already.product_id = pr.recommended_product_id
+                WHERE already.product_id IS NULL
+             )
+            SELECT recommended_product_id, max(recommended_product_name) AS recommended_product_name,
+                   recommended_category, max(recommended_units) AS units,
+                   sum(score) AS score, max(confidence) AS confidence, max(lift) AS lift,
+                   sum(cooccurrences) AS cooccurrences,
+                   count(DISTINCT antecedent_product_id) AS evidence_products
+            FROM candidates
+            GROUP BY recommended_product_id, recommended_category
+            ORDER BY score DESC, cooccurrences DESC LIMIT {int(limit)}""",
+        [client],
+    )
+    return {
+        "customer": None if not customer else {
+            "clientId": customer["client_id"],
+            "segmentId": int(customer["segment_id"]),
+            "segmentName": customer["segment_name"],
+            "frequency": int(customer["frequency"]),
+            "unitsTotal": int(customer["units_total"]),
+            "distinctProducts": int(customer["distinct_products"]),
+            "distinctCategories": int(customer["distinct_categories"]),
+        },
+        "items": [
+            {
+                "code": r["recommended_product_id"],
+                "label": _product_label(r["recommended_product_id"], r.get("recommended_product_name")),
+                "productName": r.get("recommended_product_name"),
+                "category": r["recommended_category"],
+                "units": int(r["units"]),
+                "cooccurrences": int(r["cooccurrences"]),
+                "confidence": round(float(r["confidence"]), 4),
+                "lift": round(float(r["lift"]), 4),
+                "score": round(float(r["score"]), 4),
+                "evidenceProducts": int(r["evidence_products"]),
+            }
+            for r in rows
+        ],
     }

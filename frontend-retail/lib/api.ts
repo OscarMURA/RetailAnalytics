@@ -15,6 +15,11 @@ import type {
   CorrelationResponse,
   MetaResponse,
   DataFilters,
+  SegmentsResponse,
+  SegmentPoint,
+  RecommendationSeedsResponse,
+  ProductRecommendationsResponse,
+  CustomerRecommendationsResponse,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -28,7 +33,7 @@ export class ApiError extends Error {
   }
 }
 
-type ParamValue = string | number | undefined;
+type ParamValue = string | number | undefined | null;
 
 async function get<T>(path: string, params?: Record<string, ParamValue>): Promise<T> {
   const url = new URL(`/api${path}`, API_BASE);
@@ -84,4 +89,15 @@ export const api = {
   weekdayDistribution: (f?: DataFilters) =>
     get<WeekdayDistribution[]>("/viz/weekday-distribution", filterParams(f)),
   correlation: (f?: DataFilters) => get<CorrelationResponse>("/viz/correlation", filterParams(f)),
+
+  segments: (pointsPerSegment = 120) =>
+    get<SegmentsResponse>("/advanced/segments", { points_per_segment: pointsPerSegment }),
+  segmentCustomers: (segmentId?: number, limit = 25) =>
+    get<SegmentPoint[]>("/advanced/segments/customers", { segment_id: segmentId, limit }),
+  recommendationSeeds: (limit = 20) =>
+    get<RecommendationSeedsResponse>("/advanced/recommendations/seeds", { limit }),
+  productRecommendations: (productId?: string, limit = 8) =>
+    get<ProductRecommendationsResponse>("/advanced/recommendations/products", { product_id: productId, limit }),
+  customerRecommendations: (clientId?: string, limit = 8) =>
+    get<CustomerRecommendationsResponse>("/advanced/recommendations/customers", { client_id: clientId, limit }),
 };

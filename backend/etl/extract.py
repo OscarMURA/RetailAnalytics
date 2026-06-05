@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
 
@@ -26,20 +28,113 @@ def read_transactions(spark: SparkSession, input_dir: Path) -> DataFrame:
     )
 
 
-def read_product_category(spark: SparkSession, input_dir: Path) -> DataFrame:
-    """ProductCategory.csv HAS header v.Code_pr|v.code → productCode|categoryCode."""
+def _norm(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _spark_col(name: str):
+    return F.col(f"`{name}`")
+
+
+def _pick_col(columns: list[str], candidates: set[str], contains: tuple[str, ...] = ()) -> str | None:
+    normalized = {c: _norm(c) for c in columns}
+    for col, key in normalized.items():
+        if key in candidates:
+            return col
+    if contains:
+        for col, key in normalized.items():
+            if any(token in key for token in contains):
+                return col
+    return None
+
+
+def _empty_product_names(spark: SparkSession) -> DataFrame:
     schema = T.StructType(
         [
-            T.StructField("productCode", T.StringType()),
-            T.StructField("categoryCode", T.StringType()),
+            T.StructField("product_id", T.StringType()),
+            T.StructField("product_name", T.StringType()),
         ]
     )
-    return (
+    return spark.createDataFrame([], schema)
+
+
+def read_product_category(spark: SparkSession, input_dir: Path) -> DataFrame:
+    """ProductCategory.csv with optional product-name column.
+
+    Current dataset copy has only v.Code_pr|v.code. If a richer catalog adds a
+    name/description column, it is exposed as productName.
+    """
+    raw = (
         spark.read.option("sep", "|")
         .option("header", "true")
-        .schema(schema)
+        .option("inferSchema", "false")
         .csv(str(input_dir / "Products" / "ProductCategory.csv"))
     )
+    cols = raw.columns
+    product_col = _pick_col(
+        cols,
+        {"vcodepr", "productcode", "productid", "codepr", "codigoproducto", "codproducto"},
+        ("product", "codepr"),
+    ) or cols[0]
+    category_col = _pick_col(
+        [c for c in cols if c != product_col],
+        {"vcode", "categorycode", "categoryid", "code", "codigocategoria", "codcategoria"},
+        ("category", "cat"),
+    ) or (cols[1] if len(cols) > 1 else cols[0])
+    name_col = _pick_col(
+        [c for c in cols if c not in {product_col, category_col}],
+        {"productname", "nombreproducto", "nombre", "name", "descripcion", "description", "producto"},
+        ("name", "nombre", "descripcion", "description"),
+    )
+
+    selected = raw.select(
+        _spark_col(product_col).cast("string").alias("productCode"),
+        _spark_col(category_col).cast("string").alias("categoryCode"),
+        (_spark_col(name_col).cast("string") if name_col else F.lit(None).cast("string")).alias("productName"),
+    )
+    return selected
+
+
+def read_product_names(spark: SparkSession, input_dir: Path) -> DataFrame:
+    """Read optional product-name catalog if present.
+
+    Supported files under Products/: Products.csv, Product.csv, ProductNames.csv,
+    ProductCatalog.csv, ProductCatalogue.csv. Expected shape: a product code
+    column and a name/description column, with any reasonable header variant.
+    """
+    products_dir = input_dir / "Products"
+    for filename in [
+        "Products.csv",
+        "Product.csv",
+        "ProductNames.csv",
+        "ProductCatalog.csv",
+        "ProductCatalogue.csv",
+        "ProductMaster.csv",
+    ]:
+        path = products_dir / filename
+        if not path.exists():
+            continue
+        raw = spark.read.option("sep", "|").option("header", "true").csv(str(path))
+        cols = raw.columns
+        if len(cols) < 2:
+            continue
+        code_col = _pick_col(
+            cols,
+            {"productcode", "productid", "code", "codigo", "codigoproducto", "codproducto", "vcodepr"},
+            ("product", "code", "codigo"),
+        ) or cols[0]
+        name_col = _pick_col(
+            [c for c in cols if c != code_col],
+            {"productname", "nombreproducto", "nombre", "name", "descripcion", "description", "producto"},
+            ("name", "nombre", "descripcion", "description", "producto"),
+        )
+        if not name_col:
+            continue
+        return raw.select(
+            F.trim(_spark_col(code_col).cast("string")).alias("product_id"),
+            F.trim(_spark_col(name_col).cast("string")).alias("product_name"),
+        ).where(F.col("product_id").isNotNull() & (F.col("product_id") != ""))
+    return _empty_product_names(spark)
 
 
 def read_categories(spark: SparkSession, input_dir: Path) -> DataFrame:

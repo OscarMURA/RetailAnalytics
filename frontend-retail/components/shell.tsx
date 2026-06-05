@@ -31,8 +31,8 @@ interface NavLink {
 const ANALYTICS_LINKS: NavLink[] = [
   { href: "/dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} />, enabled: true },
   { href: "/visualizaciones", label: "Visualizaciones", icon: <BarChart3 size={18} />, enabled: true },
-  { href: "/segmentacion", label: "Segmentación", icon: <Users size={18} />, enabled: false },
-  { href: "/recomendador", label: "Recomendador", icon: <Sparkles size={18} />, enabled: false },
+  { href: "/segmentacion", label: "Segmentación", icon: <Users size={18} />, enabled: true },
+  { href: "/recomendador", label: "Recomendador", icon: <Sparkles size={18} />, enabled: true },
 ];
 
 const ADMIN_LINKS: NavLink[] = [

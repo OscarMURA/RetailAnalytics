@@ -36,14 +36,25 @@ def _category_map(spark: SparkSession, input_dir: Path) -> DataFrame:
         .filter(F.col("category_id").isNotNull())
     )
     deterministic = pc.groupBy("product_id").agg(F.min("category_id").alias("category_id"))
+    names_from_map = pc.groupBy("product_id").agg(F.first(F.trim("productName"), ignorenulls=True).alias("mapped_name"))
+    names_from_catalog = extract.read_product_names(spark, input_dir)
+    product_names = (
+        names_from_map.join(names_from_catalog, on="product_id", how="full")
+        .withColumn("product_name", F.coalesce(F.col("product_name"), F.col("mapped_name")))
+        .select("product_id", "product_name")
+    )
     categories = extract.read_categories(spark, input_dir).withColumn(
         "category_name", F.trim("categoryName")
     )
-    return deterministic.join(
-        categories.select(F.col("categoryCode").alias("category_id"), "category_name"),
-        on="category_id",
-        how="left",
-    ).select("product_id", "category_id", "category_name")
+    return (
+        deterministic.join(
+            categories.select(F.col("categoryCode").alias("category_id"), "category_name"),
+            on="category_id",
+            how="left",
+        )
+        .join(product_names, on="product_id", how="left")
+        .select("product_id", "product_name", "category_id", "category_name")
+    )
 
 
 def build_curated(spark: SparkSession, input_dir: Path):
@@ -89,7 +100,7 @@ def build_curated(spark: SparkSession, input_dir: Path):
         )
         .select(
             "transaction_id", "date", "store_id", "customer_id", "client", "dow",
-            "product_id", "qty", "category_id", "category_name",
+            "product_id", "product_name", "qty", "category_id", "category_name",
         )
     )
 

@@ -31,6 +31,10 @@ _DATASETS = [
     "product_catalog",
     "category_breakdown",
     "overview",
+    "customer_segments",
+    "segment_summary",
+    "product_recommendations",
+    "customer_product_history",
 ]
 
 # All DuckDB work runs on ONE dedicated worker thread. The connection is created
@@ -56,7 +60,7 @@ def _build_con() -> duckdb.DuckDBPyConnection | None:
 
 
 def warehouse_ready() -> bool:
-    return (WAREHOUSE / "overview").exists()
+    return all((WAREHOUSE / dataset).exists() for dataset in _DATASETS)
 
 
 def _run(sql: str, params: list) -> list[dict]:

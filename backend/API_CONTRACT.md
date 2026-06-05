@@ -15,7 +15,7 @@ request time**, so filters recompute results live. Dataset: 4 stores,
 Use `GET /api/meta` to populate the filter UI. Filters compose (AND).
 
 ## Real-data realities (design around, not bugs)
-- Products have NO names → labeled `Producto {code}`. `units ≈ transactions` per
+- Product labels use catalog product names when available; otherwise fallback to `Producto {code}`. `units ≈ transactions` per
   product because a product code almost never repeats inside one basket (qty is 1
   for all but a single occurrence in the whole dataset).
 - ~206 of 449 product codes have no category → `"Sin categoría"` (~50% of units).
@@ -126,3 +126,42 @@ Pearson over per-client features (the `customer_profiles` dataset; recomputed
 under filters). Variables: frequency(#transactions), total volume(units), avg
 basket size, distinct products, distinct categories, recency(days vs filtered max
 date).
+
+---
+
+## Análisis Avanzado
+
+### `GET /api/advanced/segments?points_per_segment=120`
+
+Devuelve el resumen de los cuatro clusters K-Means y una muestra de puntos para visualizar frecuencia vs volumen.
+
+```json
+{
+  "segments": [
+    { "segmentId": 1, "name": "Ocasionales", "customers": 46650, "sharePct": 29.45,
+      "avgFrequency": 1.25, "avgUnitsTotal": 4.7, "avgDistinctProducts": 4.55,
+      "avgDistinctCategories": 2.48, "avgBasketSize": 3.84, "avgRecencyDays": 108.68,
+      "description": "Baja frecuencia..." }
+  ],
+  "points": [
+    { "clientId": "CUST-102-530", "segmentId": 1, "frequency": 1, "unitsTotal": 3,
+      "distinctProducts": 3, "distinctCategories": 2, "avgBasketSize": 3.0, "recencyDays": 180 }
+  ]
+}
+```
+
+### `GET /api/advanced/segments/customers?segment_id=4&limit=25`
+
+Clientes destacados por volumen/frecuencia, opcionalmente filtrados por segmento.
+
+### `GET /api/advanced/recommendations/seeds?limit=20`
+
+Productos y clientes sugeridos para usar como semillas en la interfaz del recomendador.
+
+### `GET /api/advanced/recommendations/products?product_id=5&limit=8`
+
+Recomendaciones producto-producto por co-ocurrencia. Métricas: `cooccurrences`, `confidence`, `lift`, `score`.
+
+### `GET /api/advanced/recommendations/customers?client_id=CUST-103-336296&limit=8`
+
+Recomendaciones cliente-producto. Excluye productos ya comprados por el cliente y agrega evidencia desde sus productos históricos.

@@ -26,6 +26,10 @@ CUSTOMER_PROFILES = WAREHOUSE_DIR / "customer_profiles"
 PRODUCT_CATALOG = WAREHOUSE_DIR / "product_catalog"
 CATEGORY_BREAKDOWN = WAREHOUSE_DIR / "category_breakdown"
 OVERVIEW = WAREHOUSE_DIR / "overview"
+CUSTOMER_SEGMENTS = WAREHOUSE_DIR / "customer_segments"
+SEGMENT_SUMMARY = WAREHOUSE_DIR / "segment_summary"
+PRODUCT_RECOMMENDATIONS = WAREHOUSE_DIR / "product_recommendations"
+CUSTOMER_PRODUCT_HISTORY = WAREHOUSE_DIR / "customer_product_history"
 
 UNMAPPED_CATEGORY = "Sin categoría"
 

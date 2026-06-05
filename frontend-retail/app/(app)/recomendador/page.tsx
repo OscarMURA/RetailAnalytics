@@ -1,0 +1,208 @@
+"use client";
+
+import { useCallback, useState } from "react";
+import { PackageSearch, Sparkles, UserRound, Network } from "lucide-react";
+import { PageHeader } from "@/components/shell";
+import { Badge, Card, CardHeader, Segmented } from "@/components/ui";
+import { EmptyBlock, ErrorBlock, LoadingBlock } from "@/components/states";
+import { HorizontalBars } from "@/components/charts/horizontal-bars";
+import { useFetch } from "@/lib/use-fetch";
+import { api } from "@/lib/api";
+import { PALETTE, formatNumber } from "@/lib/constants";
+import type { ProductRecommendationItem } from "@/lib/types";
+
+type Mode = "product" | "customer";
+
+export default function RecomendadorPage() {
+  const [mode, setMode] = useState<Mode>("product");
+  const [productId, setProductId] = useState<string | undefined>();
+  const [clientId, setClientId] = useState<string | undefined>();
+
+  const seeds = useFetch(() => api.recommendationSeeds(24), []);
+  const productRecs = useFetch(() => api.productRecommendations(productId, 10), [productId]);
+  const customerRecs = useFetch(() => api.customerRecommendations(clientId, 10), [clientId]);
+
+  const selectedProductId = productId ?? seeds.data?.products[0]?.code ?? "";
+  const selectedClientId = clientId ?? seeds.data?.customers[0]?.clientId ?? "";
+
+  const reloadAll = useCallback(() => {
+    seeds.reload();
+    productRecs.reload();
+    customerRecs.reload();
+  }, [seeds, productRecs, customerRecs]);
+
+  const activeItems = mode === "product" ? productRecs.data?.items : customerRecs.data?.items;
+
+  return (
+    <div className="view-enter">
+      <PageHeader
+        eyebrow="Análisis avanzado"
+        title="Recomendador de productos"
+        subtitle="Reglas de asociación por co-ocurrencia en canasta: confianza, lift y score para venta cruzada."
+        onRefresh={reloadAll}
+      />
+
+      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 mb-6">
+        <Card accent className="xl:col-span-1">
+          <CardHeader
+            icon={<Sparkles size={16} />}
+            title="Modo de recomendación"
+            subtitle="Selecciona producto semilla o cliente objetivo"
+            right={
+              <Segmented
+                value={mode}
+                onChange={setMode}
+                options={[
+                  { value: "product", label: "Producto" },
+                  { value: "customer", label: "Cliente" },
+                ]}
+              />
+            }
+          />
+
+          {seeds.loading ? (
+            <LoadingBlock height={220} />
+          ) : seeds.error ? (
+            <ErrorBlock message={seeds.error} onRetry={seeds.reload} height={220} />
+          ) : !seeds.data ? (
+            <EmptyBlock height={220} />
+          ) : mode === "product" ? (
+            <div className="space-y-4">
+              <label className="block text-xs font-medium text-slate-600">Producto origen</label>
+              <select
+                value={selectedProductId}
+                onChange={(e) => setProductId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+              >
+                {seeds.data.products.map((p) => (
+                  <option key={p.code} value={p.code}>{p.label} · {p.category}</option>
+                ))}
+              </select>
+              {productRecs.data?.seed && (
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-4">
+                  <Badge tone="emerald">Semilla</Badge>
+                  <h3 className="text-lg font-bold text-slate-900 mt-3">{productRecs.data.seed.label}</h3>
+                  <p className="text-xs text-slate-500 mt-1">{productRecs.data.seed.category}</p>
+                  <div className="grid grid-cols-2 gap-3 mt-4">
+                    <Metric label="Unidades" value={formatNumber(productRecs.data.seed.units)} />
+                    <Metric label="Transacciones" value={formatNumber(productRecs.data.seed.transactions)} />
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <label className="block text-xs font-medium text-slate-600">Cliente objetivo</label>
+              <select
+                value={selectedClientId}
+                onChange={(e) => setClientId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+              >
+                {seeds.data.customers.map((c) => (
+                  <option key={c.clientId} value={c.clientId}>{c.clientId} · {c.segmentName}</option>
+                ))}
+              </select>
+              {customerRecs.data?.customer && (
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-4">
+                  <Badge tone="blue">{customerRecs.data.customer.segmentName}</Badge>
+                  <h3 className="text-lg font-bold text-slate-900 mt-3">{customerRecs.data.customer.clientId}</h3>
+                  <div className="grid grid-cols-2 gap-3 mt-4">
+                    <Metric label="Compras" value={formatNumber(customerRecs.data.customer.frequency)} />
+                    <Metric label="Unidades" value={formatNumber(customerRecs.data.customer.unitsTotal)} />
+                    <Metric label="Productos" value={formatNumber(customerRecs.data.customer.distinctProducts)} />
+                    <Metric label="Categorías" value={formatNumber(customerRecs.data.customer.distinctCategories)} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+
+        <Card accent className="xl:col-span-2">
+          <CardHeader
+            icon={mode === "product" ? <PackageSearch size={16} /> : <UserRound size={16} />}
+            title={mode === "product" ? "Productos comprados junto al origen" : "Productos sugeridos para el cliente"}
+            subtitle="Ranking por score = confianza x lift"
+            right={<Badge tone="slate">reglas de asociación</Badge>}
+          />
+          {(mode === "product" ? productRecs.loading : customerRecs.loading) ? (
+            <LoadingBlock height={330} />
+          ) : (mode === "product" ? productRecs.error : customerRecs.error) ? (
+            <ErrorBlock message={(mode === "product" ? productRecs.error : customerRecs.error) ?? "Error"} onRetry={mode === "product" ? productRecs.reload : customerRecs.reload} height={330} />
+          ) : !activeItems?.length ? (
+            <EmptyBlock height={330} />
+          ) : (
+            <HorizontalBars
+              color={mode === "product" ? PALETTE.emerald600 : PALETTE.blue500}
+              data={activeItems.map((item) => ({
+                label: item.label,
+                value: Math.round(item.score * 1000),
+                subtitle: `${item.category} · confianza ${(item.confidence * 100).toFixed(1)}% · lift ${item.lift.toFixed(2)}`,
+                title: `${item.label} · ${item.category} · ${formatNumber(item.cooccurrences)} co-ocurrencias`,
+              }))}
+            />
+          )}
+        </Card>
+      </section>
+
+      <section>
+        <Card accent>
+          <CardHeader
+            icon={<Network size={16} />}
+            title="Detalle de reglas"
+            subtitle="Métricas usadas para priorizar las recomendaciones"
+          />
+          {(mode === "product" ? productRecs.loading : customerRecs.loading) ? (
+            <LoadingBlock height={280} />
+          ) : !activeItems?.length ? (
+            <EmptyBlock height={280} />
+          ) : (
+            <RecommendationTable items={activeItems} mode={mode} />
+          )}
+        </Card>
+      </section>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-1">{label}</div>
+      <div className="text-lg font-bold text-slate-900 tabular-nums leading-none">{value}</div>
+    </div>
+  );
+}
+
+function RecommendationTable({ items, mode }: { items: ProductRecommendationItem[]; mode: Mode }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs uppercase tracking-wider text-slate-400 border-b border-slate-100">
+            <th className="py-2 pr-4 font-semibold">Producto</th>
+            <th className="py-2 px-4 font-semibold">Categoría</th>
+            <th className="py-2 px-4 font-semibold text-right">Co-ocurrencias</th>
+            <th className="py-2 px-4 font-semibold text-right">Confianza</th>
+            <th className="py-2 px-4 font-semibold text-right">Lift</th>
+            <th className="py-2 px-4 font-semibold text-right">Score</th>
+            {mode === "customer" && <th className="py-2 pl-4 font-semibold text-right">Evidencia</th>}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {items.map((item) => (
+            <tr key={item.code} className="text-slate-700">
+              <td className="py-3 pr-4 font-medium text-slate-900 whitespace-nowrap">{item.label}</td>
+              <td className="py-3 px-4 min-w-56"><span className="block truncate">{item.category}</span></td>
+              <td className="py-3 px-4 text-right tabular-nums">{formatNumber(item.cooccurrences)}</td>
+              <td className="py-3 px-4 text-right tabular-nums">{(item.confidence * 100).toFixed(1)}%</td>
+              <td className="py-3 px-4 text-right tabular-nums">{item.lift.toFixed(2)}</td>
+              <td className="py-3 px-4 text-right tabular-nums">{item.score.toFixed(3)}</td>
+              {mode === "customer" && <td className="py-3 pl-4 text-right tabular-nums">{formatNumber(item.evidenceProducts)}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}

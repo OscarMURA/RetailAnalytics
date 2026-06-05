@@ -11,8 +11,8 @@ ingest new data ("incorporación de nuevos datos").
 
   extract  : read raw transaction + product/category CSVs.
   clean    : validate, explode baskets, attach category → purchases + baskets.
-  builders : daily_sales, customer_profiles, product_catalog,
-             category_breakdown, overview.
+  builders : daily_sales, customer_profiles, customer_segments, product_catalog,
+             category_breakdown, product_recommendations, overview.
 
 DATA INTERPRETATION RULES (documented in README):
   - 1 CSV row = 1 transaction. units = sum of basket lengths.
@@ -26,13 +26,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from etl import clean, config
+from etl import clean, config, warehouse
 from etl.builders import (
     category_breakdown,
     customer_profiles,
+    customer_segments,
     daily_sales,
     overview,
     product_catalog,
+    product_recommendations,
 )
 from etl.spark_session import get_spark
 
@@ -53,8 +55,10 @@ def main() -> None:
     print("[ETL] builders ...")
     daily_sales.build(baskets, purchases)
     customer_profiles.build(baskets, purchases)
+    customer_segments.build(warehouse.read(spark, config.CUSTOMER_PROFILES))
     product_catalog.build(baskets, purchases)
     category_breakdown.build(baskets, purchases)
+    product_recommendations.build(purchases)
     overview.build(spark, baskets, purchases)
 
     tx_n = baskets.count()

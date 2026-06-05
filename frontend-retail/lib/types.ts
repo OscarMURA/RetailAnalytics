@@ -35,6 +35,7 @@ export interface TopProduct {
   code: string;
   label: string;
   category: string;
+  productName?: string | null;
   units: number;
 }
 
@@ -143,4 +144,91 @@ export interface WeekdayDistribution {
 export interface CorrelationResponse {
   labels: string[];
   matrix: number[][];
+}
+
+export interface SegmentSummary {
+  segmentId: number;
+  name: string;
+  customers: number;
+  sharePct: number;
+  avgFrequency: number;
+  avgUnitsTotal: number;
+  avgDistinctProducts: number;
+  avgDistinctCategories: number;
+  avgBasketSize: number;
+  avgRecencyDays: number;
+  description: string;
+}
+
+export interface SegmentPoint {
+  clientId: string;
+  segmentId: number;
+  segmentName: string;
+  frequency: number;
+  unitsTotal: number;
+  distinctProducts: number;
+  distinctCategories: number;
+  avgBasketSize: number;
+  recencyDays: number;
+}
+
+export interface SegmentsResponse {
+  segments: SegmentSummary[];
+  points: SegmentPoint[];
+}
+
+export interface RecommendationSeedProduct {
+  code: string;
+  label: string;
+  category: string;
+  productName?: string | null;
+  units: number;
+  transactions: number;
+}
+
+export interface RecommendationSeedCustomer {
+  clientId: string;
+  segmentId: number;
+  segmentName: string;
+  frequency: number;
+  unitsTotal: number;
+}
+
+export interface RecommendationSeedsResponse {
+  products: RecommendationSeedProduct[];
+  customers: RecommendationSeedCustomer[];
+}
+
+export interface ProductRecommendationItem {
+  rank?: number;
+  code: string;
+  label: string;
+  category: string;
+  productName?: string | null;
+  units: number;
+  cooccurrences: number;
+  confidence: number;
+  lift: number;
+  score: number;
+  evidenceProducts?: number;
+}
+
+export interface ProductRecommendationsResponse {
+  seed: RecommendationSeedProduct | null;
+  items: ProductRecommendationItem[];
+}
+
+export interface CustomerRecommendationProfile {
+  clientId: string;
+  segmentId: number;
+  segmentName: string;
+  frequency: number;
+  unitsTotal: number;
+  distinctProducts: number;
+  distinctCategories: number;
+}
+
+export interface CustomerRecommendationsResponse {
+  customer: CustomerRecommendationProfile | null;
+  items: ProductRecommendationItem[];
 }

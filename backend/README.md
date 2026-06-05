@@ -21,7 +21,7 @@ Python 3.11+, Java 17, [uv](https://docs.astral.sh/uv/). PySpark 4.1.1, DuckDB.
 ```bash
 cd backend
 uv venv
-uv pip install "pyspark==4.1.1" "duckdb>=1.5" "fastapi>=0.115" "uvicorn[standard]>=0.32"
+uv pip install "pyspark==4.1.1" "duckdb>=1.5" "fastapi>=0.115" "uvicorn[standard]>=0.32" "numpy>=1.26"
 ```
 
 ## 1. Run the ETL (builds the Parquet warehouse)
@@ -46,8 +46,9 @@ API picks up refreshed data without a restart.
 - `etl/clean.py` — validate/normalize, explode baskets, attach category →
   produces the curated `purchases` (item level) and `baskets` (transaction level).
 - `etl/builders/` — one builder per analytical dataset:
-  `daily_sales`, `customer_profiles`, `product_catalog`, `category_breakdown`,
-  `overview`.
+  `daily_sales`, `customer_profiles`, `customer_segments`, `segment_summary`,
+  `product_catalog`, `category_breakdown`, `product_recommendations`,
+  `customer_product_history`, `overview`.
 - `etl/warehouse.py` — Parquet read/write IO.
 - `etl/pipeline.py` — orchestrator (`python -m etl.pipeline --input …`).
 - `app/db.py` — cached DuckDB connection with lazy views over the warehouse.
@@ -67,6 +68,13 @@ Analytical (one builder each):
 - **customer_profiles**: client_id, frequency, units_total, distinct_products,
   distinct_categories, avg_basket_size, recency_days.
 - **product_catalog**: product_id, category_id, category_name, units, transactions.
+- **customer_segments**: client_id, segment_id, segment_name, frequency, units_total,
+  distinct_products, distinct_categories, avg_basket_size, recency_days.
+- **segment_summary**: aggregate size and behavioral averages per K-Means segment.
+- **product_recommendations**: association-rule style product recommendations with
+  cooccurrences, confidence, lift and score.
+- **customer_product_history**: compact client-product history used to recommend
+  products not yet purchased by a client.
 - **category_breakdown**: category_id, category_name, units, transactions, customers.
 - **overview**: single row — date_min, date_max, total_units, total_transactions,
   unique_customers, distinct_products, active_stores.
@@ -89,7 +97,7 @@ filter UI.
 - **Product → category**: deterministic **MIN categoryCode**; unmapped →
   `category_id` NULL / **"Sin categoría"** (~50% of units; only 20 categories
   actually appear among mapped products).
-- Products have **no names** → `Producto {code}`.
+- Product labels use catalog product names when available; otherwise fallback to `Producto {code}`.
 - **KPI deltas**: last-30d vs prior-30d within the resolved (filtered) range.
 - **avgTicket** = units / transactions.
 - **No time-of-day** → weekday distribution (dow 0=Mon..6=Sun), never hours.
