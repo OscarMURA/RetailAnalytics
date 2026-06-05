@@ -173,3 +173,21 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #cbd5e1;
 }
+
+/* ── PDF export helpers ───────────────────────────────────────────────── */
+/* Blocks rendered only into the exported PDF (hidden in the live UI). */
+.export-only {
+  display: none;
+}
+.report-exporting .export-only {
+  display: revert;
+}
+/* Interactive chrome we don't want baked into the document. */
+.report-exporting .hide-on-export {
+  display: none !important;
+}
+/* Neutralize hover dimming / lifts while capturing. */
+.report-exporting [data-report-section] {
+  opacity: 1 !important;
+  transform: none !important;
+}

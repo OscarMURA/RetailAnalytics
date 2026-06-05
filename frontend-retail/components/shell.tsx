@@ -16,6 +16,7 @@ import {
   X,
   RefreshCw,
   Download,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAuth, ROLES, type Role } from "@/lib/auth";
@@ -258,12 +259,18 @@ export function PageHeader({
   subtitle,
   eyebrow,
   onRefresh,
+  onExport,
+  exporting = false,
+  actions,
   showFilters = false,
 }: {
   title: string;
   subtitle?: string;
   eyebrow?: string;
   onRefresh?: () => void;
+  onExport?: () => void;
+  exporting?: boolean;
+  actions?: ReactNode;
   showFilters?: boolean;
 }) {
   return (
@@ -303,6 +310,7 @@ export function PageHeader({
               </span>
               Datos en vivo
             </span>
+            {actions}
             <button
               onClick={onRefresh}
               className="inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border border-white/15 bg-white/5 text-slate-200 hover:bg-white/10 hover:text-white transition-colors"
@@ -310,9 +318,14 @@ export function PageHeader({
               <RefreshCw size={14} />
               <span className="hidden sm:inline">Refrescar</span>
             </button>
-            <button className="inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-lg text-white shadow-sm transition-transform hover:-translate-y-px" style={{ background: "var(--gradient-brand)" }}>
-              <Download size={14} />
-              <span className="hidden sm:inline">Exportar</span>
+            <button
+              onClick={onExport}
+              disabled={exporting || !onExport}
+              className="inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-lg text-white shadow-sm transition-transform hover:-translate-y-px disabled:opacity-60 disabled:hover:translate-y-0 disabled:cursor-not-allowed"
+              style={{ background: "var(--gradient-brand)" }}
+            >
+              {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              <span className="hidden sm:inline">{exporting ? "Generando…" : "Exportar PDF"}</span>
             </button>
           </div>
         </div>

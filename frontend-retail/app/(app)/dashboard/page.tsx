@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Package, Users, Calendar, Filter, BarChart3, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Package, Users, Calendar, Filter, BarChart3, TrendingUp, TrendingDown, Minus, DatabaseZap } from "lucide-react";
 import { PageHeader } from "@/components/shell";
 import { Card, CardHeader, Badge, KpiCard, Segmented } from "@/components/ui";
 import { LoadingBlock, ErrorBlock, EmptyBlock } from "@/components/states";
@@ -10,7 +10,10 @@ import { CalendarHeatmap } from "@/components/charts/calendar-heatmap";
 import { CategoriesDonut } from "@/components/charts/categories-donut";
 import { PeakTimeseries } from "@/components/charts/peak-timeseries";
 import { useFetch } from "@/lib/use-fetch";
+import { useReportExport } from "@/lib/use-report-export";
+import { JobButton } from "@/components/job-button";
 import { useFilters } from "@/lib/filters";
+import { filterMeta } from "@/lib/report-meta";
 import { api } from "@/lib/api";
 import { PALETTE, CHART_COLORS, MONTHS_ES, formatNumber } from "@/lib/constants";
 import type { CustomerSortBy } from "@/lib/types";
@@ -28,14 +31,17 @@ export default function DashboardPage() {
 
   const [customerBy, setCustomerBy] = useState<CustomerSortBy>("transactions");
   const [peakView, setPeakView] = useState<"heatmap" | "series">("heatmap");
+  const { rootRef, exporting, exportPdf } = useReportExport();
 
-  const kpis = useFetch(() => api.kpis(filters), [fkey]);
-  const products = useFetch(() => api.topProducts(10, filters), [fkey]);
-  const customers = useFetch(() => api.topCustomers(10, customerBy, filters), [fkey, customerBy]);
-  const calendar = useFetch(() => api.calendar(90, filters), [fkey]);
-  const peak = useFetch(() => api.peakTimeseries(filters), [fkey]);
-  const categories = useFetch(() => api.categories(filters), [fkey]);
-  const coverage = useFetch(() => api.coverage(filters), [fkey]);
+  const kpis = useFetch(() => api.kpis(filters), [fkey], { cacheKey: "kpis" });
+  const products = useFetch(() => api.topProducts(10, filters), [fkey], { cacheKey: "topProducts" });
+  const customers = useFetch(() => api.topCustomers(10, customerBy, filters), [fkey, customerBy], {
+    cacheKey: "topCustomers",
+  });
+  const calendar = useFetch(() => api.calendar(90, filters), [fkey], { cacheKey: "calendar" });
+  const peak = useFetch(() => api.peakTimeseries(filters), [fkey], { cacheKey: "peak" });
+  const categories = useFetch(() => api.categories(filters), [fkey], { cacheKey: "categories" });
+  const coverage = useFetch(() => api.coverage(filters), [fkey], { cacheKey: "coverage" });
 
   const reloadAll = useCallback(() => {
     kpis.reload();
@@ -55,18 +61,39 @@ export default function DashboardPage() {
 
   const customerUnit = customerBy === "units" ? "unidades" : "transacciones";
 
+  const handleExport = () =>
+    exportPdf({
+      title: "Resumen ejecutivo",
+      eyebrow: "Dashboard",
+      subtitle: "Visión consolidada del comportamiento transaccional de supermercado.",
+      filename: "RetailAnalytics-ResumenEjecutivo.pdf",
+      meta: filterMeta(filters),
+    });
+
   return (
-    <div className="view-enter">
+    <div className="view-enter" ref={rootRef}>
       <PageHeader
         eyebrow="Dashboard"
         title="Resumen ejecutivo"
         subtitle="Visión consolidada del comportamiento transaccional. Usa los filtros para acotar por tienda y rango de fechas."
         onRefresh={reloadAll}
+        onExport={handleExport}
+        exporting={exporting}
+        actions={
+          <JobButton
+            kind="reingest"
+            idleLabel="Actualizar consultas"
+            runningVerb="Actualizando"
+            icon={DatabaseZap}
+            onDone={reloadAll}
+            title="Reingesta el dataset completo con Spark (ETL: extract → clean → modelos) y vuelve a consultar."
+          />
+        }
         showFilters
       />
 
       {/* KPIs */}
-      <section className="mb-6">
+      <section data-report-section className="mb-6">
         {kpis.loading ? (
           <LoadingBlock height={140} />
         ) : kpis.error ? (
@@ -81,7 +108,7 @@ export default function DashboardPage() {
       </section>
 
       {/* Top productos / clientes */}
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6 mb-6">
+      <section data-report-section className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6 mb-6">
         <Card accent>
           <CardHeader
             icon={<Package size={16} />}
@@ -137,7 +164,7 @@ export default function DashboardPage() {
       </section>
 
       {/* Días pico: heatmap / serie */}
-      <section className="mb-6">
+      <section data-report-section className="mb-6">
         <Card accent>
           <CardHeader
             icon={<Calendar size={16} />}
@@ -215,8 +242,42 @@ export default function DashboardPage() {
         </Card>
       </section>
 
+      {/* Solo en el PDF: datos del heatmap de días pico */}
+      {peak.data?.top5?.length ? (
+        <section data-report-section className="export-only mb-6">
+          <Card accent>
+            <CardHeader
+              icon={<Calendar size={16} />}
+              title="Días pico — detalle"
+              subtitle="Top días por número de transacciones (datos del heatmap)"
+            />
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wider text-slate-400 border-b border-slate-100">
+                  <th className="py-2 pr-4 font-semibold">#</th>
+                  <th className="py-2 px-4 font-semibold">Día</th>
+                  <th className="py-2 pl-4 font-semibold text-right">Transacciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {peak.data.top5.map((d, i) => {
+                  const pt = peak.data!.points.find((p) => p.date === d);
+                  return (
+                    <tr key={d} className="text-slate-700">
+                      <td className="py-2.5 pr-4 tabular-nums text-slate-400">{i + 1}</td>
+                      <td className="py-2.5 px-4 font-medium text-slate-900 whitespace-nowrap">{formatPeakDay(d)}</td>
+                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatNumber(pt?.transactions ?? 0)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+        </section>
+      ) : null}
+
       {/* Categorías: donut + ranking */}
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 mb-6">
+      <section data-report-section className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 mb-6">
         <Card accent className="xl:col-span-2">
           <CardHeader
             icon={<Filter size={16} />}
@@ -282,7 +343,7 @@ export default function DashboardPage() {
       </section>
 
       {/* Ranking de categorías (top 15) */}
-      <section className="mb-2">
+      <section data-report-section className="mb-2">
         <Card accent>
           <CardHeader
             icon={<BarChart3 size={16} />}
