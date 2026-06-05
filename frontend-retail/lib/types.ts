@@ -199,6 +199,20 @@ export interface RecommendationSeedsResponse {
   customers: RecommendationSeedCustomer[];
 }
 
+// Buscador libre del recomendador: producto o cliente, por id / nombre / categoría.
+export interface RecommendationSearchItem {
+  id: string;
+  label: string; // texto principal (etiqueta de producto o id de cliente)
+  sub: string; // texto secundario (categoría o segmento)
+  units: number;
+  transactions: number;
+}
+
+export interface RecommendationSearchResponse {
+  mode: "product" | "customer";
+  items: RecommendationSearchItem[];
+}
+
 export interface ProductRecommendationItem {
   rank?: number;
   code: string;
@@ -231,4 +245,21 @@ export interface CustomerRecommendationProfile {
 export interface CustomerRecommendationsResponse {
   customer: CustomerRecommendationProfile | null;
   items: ProductRecommendationItem[];
+}
+
+// Estado de un job Spark asíncrono (recompute de modelos o reingesta del dataset).
+export type JobKind = "recompute" | "reingest";
+
+export interface JobStatus {
+  status: "idle" | "running" | "done" | "error";
+  running: boolean;
+  kind: JobKind | null;
+  label: string;
+  error: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  elapsedMs: number | null;
+  retryAfter: number; // segundos restantes de cooldown
+  cooldownSeconds: number;
+  canTrigger: boolean;
 }

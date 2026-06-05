@@ -158,6 +158,49 @@ Clientes destacados por volumen/frecuencia, opcionalmente filtrados por segmento
 
 Productos y clientes sugeridos para usar como semillas en la interfaz del recomendador.
 
+### `GET /api/advanced/recommendations/search?mode=product|customer&q=…&limit=20`
+
+Buscador libre para elegir CUALQUIER producto o cliente como origen del
+recomendador (no solo las semillas top), sin importar el cluster. Busca por id,
+nombre/etiqueta y categoría (productos) o por id y segmento (clientes). Con `q`
+vacío devuelve el top por volumen. Respuesta unificada:
+```json
+{ "mode":"product",
+  "items":[ { "id":"5","label":"Producto 5","sub":"AROMATICAS CONDIMENTOS","units":300526,"transactions":300526 } ] }
+```
+Para `mode=customer`, `label` = `client_id`, `sub` = segmento, `units` = volumen
+total, `transactions` = frecuencia. El id elegido se pasa luego a
+`/products?product_id=` o `/customers?client_id=`.
+
+### Jobs Spark asíncronos  ·  `POST /api/advanced/recompute` · `POST /api/admin/reingest` · `GET /api/jobs/status`
+
+Dos jobs pesados que regeneran el warehouse, gestionados por UN job manager
+(`app/recompute.py`) que corre el subproceso de Spark **limitado a ~½ de los
+cores** para no tumbar la API:
+
+- `POST /api/advanced/recompute` → **kind `recompute`**: re-ejecuta solo los
+  builders de modelos (K-Means + reglas) desde el Parquet curado (~2-3 min).
+- `POST /api/admin/reingest` → **kind `reingest`**: ETL **completo** desde el
+  dataset crudo (extract → clean → todos los builders). El path del dataset sale
+  de `DATASET_INPUT_DIR` (env) si está definido (p. ej. un bucket), o el local.
+
+Políticas de resiliencia del servidor (compartidas entre ambos kinds):
+- **single-flight**: si ya hay uno corriendo (de cualquier kind) → `409`.
+- **rate limit (cooldown)**: hasta `cooldownSeconds` (30s) tras terminar →
+  `429` + header `Retry-After`.
+
+`GET /api/jobs/status` se usa para polling (alias legacy:
+`/api/advanced/recompute/status`):
+```json
+{ "status":"running", "running":true, "kind":"reingest",
+  "label":"Reingesta del dataset (ETL completo)", "error":null,
+  "startedAt":1780627457.9, "finishedAt":null, "elapsedMs":12000,
+  "retryAfter":0.0, "cooldownSeconds":30.0, "canTrigger":false }
+```
+`status` ∈ `idle|running|done|error`. El frontend hace polling con **retry +
+backoff exponencial**, respeta el `429`, muestra "Procesando…" si corre el otro
+kind, y al terminar **limpia la caché de cliente** y vuelve a consultar.
+
 ### `GET /api/advanced/recommendations/products?product_id=5&limit=8`
 
 Recomendaciones producto-producto por co-ocurrencia. Métricas: `cooccurrences`, `confidence`, `lift`, `score`.

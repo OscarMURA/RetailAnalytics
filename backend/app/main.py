@@ -11,12 +11,13 @@ Filters (optional, on all data endpoints):
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import db
+from app import db, recompute
 from app.filters import Filters, parse_filters
 
 WEEKDAY_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
@@ -32,8 +33,9 @@ app = FastAPI(title="RetailAnalytics API", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],
 )
 
 
@@ -697,6 +699,74 @@ def advanced_recommendation_seeds(limit: int = Query(20, ge=5, le=50)):
     }
 
 
+@app.get("/api/advanced/recommendations/search")
+def advanced_recommendation_search(
+    mode: str = Query("product", pattern="^(product|customer)$"),
+    q: str = Query("", description="texto libre: id, nombre o categoría"),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """Buscador libre sobre TODO el catálogo / base de clientes (no solo semillas).
+
+    Permite elegir cualquier producto o cliente como origen del recomendador,
+    sin importar a qué cluster pertenezca. Cuando `q` está vacío devuelve el top
+    por volumen (mismas sugerencias por defecto que las semillas).
+    """
+    _require_warehouse()
+    term = (q or "").strip()
+    like = f"%{term}%"
+
+    if mode == "product":
+        # "Producto 5" es solo una etiqueta sintética (no hay nombre real en el
+        # dataset) → al buscar por id se ignora ese prefijo para casar el código.
+        id_token = re.sub(r"(?i)^producto\s+", "", term).strip()
+        rows = db.query(
+            f"""SELECT product_id, product_name, category_name, units, transactions
+                FROM product_catalog
+                WHERE ? = ''
+                   OR product_id ILIKE ?
+                   OR coalesce(product_name, '') ILIKE ?
+                   OR category_name ILIKE ?
+                ORDER BY (product_id = ?) DESC, (product_id ILIKE ?) DESC, units DESC
+                LIMIT {int(limit)}""",
+            [term, f"%{id_token}%", like, like, id_token, f"{id_token}%"],
+        )
+        return {
+            "mode": "product",
+            "items": [
+                {
+                    "id": r["product_id"],
+                    "label": _product_label(r["product_id"], r.get("product_name")),
+                    "sub": r["category_name"],
+                    "units": int(r["units"]),
+                    "transactions": int(r["transactions"]),
+                }
+                for r in rows
+            ],
+        }
+
+    rows = db.query(
+        f"""SELECT client_id, segment_name, frequency, units_total
+            FROM customer_segments
+            WHERE ? = '' OR client_id ILIKE ? OR segment_name ILIKE ?
+            ORDER BY (client_id = ?) DESC, units_total DESC, frequency DESC
+            LIMIT {int(limit)}""",
+        [term, like, like, term],
+    )
+    return {
+        "mode": "customer",
+        "items": [
+            {
+                "id": r["client_id"],
+                "label": r["client_id"],
+                "sub": r["segment_name"],
+                "units": int(r["units_total"]),
+                "transactions": int(r["frequency"]),
+            }
+            for r in rows
+        ],
+    }
+
+
 @app.get("/api/advanced/recommendations/products")
 def advanced_product_recommendations(
     product_id: str | None = Query(None),
@@ -817,3 +887,47 @@ def advanced_customer_recommendations(
             for r in rows
         ],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Recompute (re-run Spark K-Means + association-rule builders, async)         #
+# --------------------------------------------------------------------------- #
+
+
+def _start_job(kind: str) -> dict:
+    res = recompute.start(kind)
+    if not res["ok"]:
+        headers = None
+        if res.get("retryAfter") is not None:
+            headers = {"Retry-After": str(int(res["retryAfter"]) + 1)}
+        raise HTTPException(res["code"], res["reason"], headers=headers)
+    return recompute.status()
+
+
+@app.post("/api/advanced/recompute")
+def advanced_recompute():
+    """Re-run the Spark K-Means + association-rule builders from curated Parquet.
+
+    Single-flight (409) and cooldown rate-limited (429 + Retry-After).
+    """
+    _require_warehouse()
+    return _start_job("recompute")
+
+
+@app.post("/api/admin/reingest")
+def admin_reingest():
+    """Run the FULL ETL (extract → clean → all builders) from the raw dataset,
+    regenerating the entire warehouse. Same single-flight + cooldown as recompute.
+    """
+    return _start_job("reingest")
+
+
+@app.get("/api/jobs/status")
+def jobs_status():
+    return recompute.status()
+
+
+# Back-compat alias for the recompute status path.
+@app.get("/api/advanced/recompute/status")
+def advanced_recompute_status():
+    return recompute.status()
