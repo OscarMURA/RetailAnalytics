@@ -20,11 +20,16 @@ def read_transactions(spark: SparkSession, input_dir: Path) -> DataFrame:
             T.StructField("productCodes", T.StringType()),
         ]
     )
+    # Enumerate files with pathlib and pass an explicit list rather than a glob:
+    # Hadoop's globber fails to expand wildcards when the path contains spaces.
+    files = sorted(str(p) for p in (input_dir / "Transactions").glob("*_Tran.csv"))
+    if not files:
+        raise FileNotFoundError(f"No *_Tran.csv files under {input_dir / 'Transactions'}")
     return (
         spark.read.option("sep", "|")
         .option("header", "false")
         .schema(schema)
-        .csv(str(input_dir / "Transactions" / "*_Tran.csv"))
+        .csv(files)
     )
 
 
