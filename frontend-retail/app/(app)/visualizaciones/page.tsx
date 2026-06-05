@@ -18,7 +18,14 @@ import { useFilters } from "@/lib/filters";
 import { filterMeta } from "@/lib/report-meta";
 import { api } from "@/lib/api";
 import { formatNumber } from "@/lib/constants";
-import type { Granularity, BoxplotDimension, CorrelationResponse } from "@/lib/types";
+import type {
+  Granularity,
+  BoxplotDimension,
+  BoxplotBox,
+  BoxplotStats,
+  BoxplotResponse,
+  CorrelationResponse,
+} from "@/lib/types";
 
 function TimeSeriesCard({ fkey, filters }: { fkey: string; filters: ReturnType<typeof useFilters>["filters"] }) {
   const [granularity, setGranularity] = useState<Granularity>("week");
@@ -130,12 +137,105 @@ const DIMENSION_LABELS: Record<BoxplotDimension, string> = {
   "transactions-per-customer": "Transacciones por cliente",
 };
 
+const BOXPLOT_DIMENSIONS: BoxplotDimension[] = [
+  "units-per-category",
+  "units-per-customer",
+  "transactions-per-customer",
+];
+
+function BoxplotStatsRow({ stats }: { stats: BoxplotStats }) {
+  return (
+    <div className="mt-2 grid grid-cols-3 gap-3 text-center">
+      <div>
+        <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Conteo</div>
+        <div className="text-sm font-semibold text-slate-900 tabular-nums">{formatNumber(stats.count)}</div>
+      </div>
+      <div>
+        <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Media</div>
+        <div className="text-sm font-semibold text-slate-900 tabular-nums">{stats.mean.toFixed(1)}</div>
+      </div>
+      <div>
+        <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Mediana</div>
+        <div className="text-sm font-semibold text-slate-900 tabular-nums">{stats.p50.toFixed(1)}</div>
+      </div>
+    </div>
+  );
+}
+
+function QuartileTable({ dimension, boxes }: { dimension: BoxplotDimension; boxes: BoxplotBox[] }) {
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-left text-slate-400 border-b border-slate-100">
+          <th className="py-1.5 pr-4 font-semibold">{DIMENSION_LABELS[dimension]}</th>
+          <th className="py-1.5 px-3 font-semibold text-right">Mín</th>
+          <th className="py-1.5 px-3 font-semibold text-right">Q1</th>
+          <th className="py-1.5 px-3 font-semibold text-right">Mediana</th>
+          <th className="py-1.5 px-3 font-semibold text-right">Q3</th>
+          <th className="py-1.5 pl-3 font-semibold text-right">Máx</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-slate-100">
+        {boxes.map((b) => (
+          <tr key={b.label} className="text-slate-700">
+            <td className="py-1 pr-4 whitespace-nowrap">{b.label}</td>
+            <td className="py-1 px-3 text-right tabular-nums">{formatNumber(b.min)}</td>
+            <td className="py-1 px-3 text-right tabular-nums">{formatNumber(b.q1)}</td>
+            <td className="py-1 px-3 text-right tabular-nums">{formatNumber(b.median)}</td>
+            <td className="py-1 px-3 text-right tabular-nums">{formatNumber(b.q3)}</td>
+            <td className="py-1 pl-3 text-right tabular-nums">{formatNumber(b.max)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// One full dimension block (title + chart + stats + quartile table) used to
+// render all three distributions into the exported PDF.
+function BoxplotExportBlock({
+  dimension,
+  res,
+  logScale,
+}: {
+  dimension: BoxplotDimension;
+  res: ReturnType<typeof useFetch<BoxplotResponse>>;
+  logScale: boolean;
+}) {
+  if (!res.data?.boxes.length) return null;
+  return (
+    <div className="pt-4 border-t border-slate-100">
+      <div className="text-sm font-semibold text-slate-900 mb-3">{DIMENSION_LABELS[dimension]}</div>
+      <Boxplot data={res.data.boxes} logScale={logScale} unit={UNIT_LABELS[dimension]} />
+      <BoxplotStatsRow stats={res.data.stats} />
+      <div className="mt-3">
+        <QuartileTable dimension={dimension} boxes={res.data.boxes} />
+      </div>
+    </div>
+  );
+}
+
 function BoxplotCard({ fkey, filters }: { fkey: string; filters: ReturnType<typeof useFilters>["filters"] }) {
   const [dimension, setDimension] = useState<BoxplotDimension>("units-per-category");
   const [logScale, setLogScale] = useState(false);
-  const box = useFetch(() => api.boxplot(dimension, filters), [dimension, fkey], {
-    cacheKey: "boxplot",
+
+  // Fetch all three dimensions so the exported PDF can show every boxplot, not
+  // only the one the user happens to be viewing on screen.
+  const catRes = useFetch(() => api.boxplot("units-per-category", filters), [fkey], {
+    cacheKey: "boxplot:units-per-category",
   });
+  const cliRes = useFetch(() => api.boxplot("units-per-customer", filters), [fkey], {
+    cacheKey: "boxplot:units-per-customer",
+  });
+  const txRes = useFetch(() => api.boxplot("transactions-per-customer", filters), [fkey], {
+    cacheKey: "boxplot:transactions-per-customer",
+  });
+  const results: Record<BoxplotDimension, ReturnType<typeof useFetch<BoxplotResponse>>> = {
+    "units-per-category": catRes,
+    "units-per-customer": cliRes,
+    "transactions-per-customer": txRes,
+  };
+  const box = results[dimension];
 
   return (
     <Card accent>
@@ -146,7 +246,7 @@ function BoxplotCard({ fkey, filters }: { fkey: string; filters: ReturnType<type
         right={
           <button
             onClick={() => setLogScale((v) => !v)}
-            className={`text-xs font-medium px-2.5 py-1 rounded-lg border transition-colors ${
+            className={`hide-on-export text-xs font-medium px-2.5 py-1 rounded-lg border transition-colors ${
               logScale
                 ? "border-emerald-300 text-emerald-700 bg-emerald-50"
                 : "border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -156,84 +256,54 @@ function BoxplotCard({ fkey, filters }: { fkey: string; filters: ReturnType<type
           </button>
         }
       />
-      <div className="mb-4">
-        <Segmented
-          value={dimension}
-          onChange={setDimension}
-          options={[
-            { value: "units-per-category", label: "U / categoría" },
-            { value: "units-per-customer", label: "U / cliente" },
-            { value: "transactions-per-customer", label: "Tx / cliente" },
-          ]}
-        />
+
+      {/* Interactive single-dimension view (screen only) */}
+      <div className="hide-on-export">
+        <div className="mb-4">
+          <Segmented
+            value={dimension}
+            onChange={setDimension}
+            options={[
+              { value: "units-per-category", label: "U / categoría" },
+              { value: "units-per-customer", label: "U / cliente" },
+              { value: "transactions-per-customer", label: "Tx / cliente" },
+            ]}
+          />
+        </div>
+        {box.loading ? (
+          <LoadingBlock height={340} />
+        ) : box.error ? (
+          <ErrorBlock message={box.error} onRetry={box.reload} height={340} />
+        ) : !box.data?.boxes.length ? (
+          <EmptyBlock height={340} />
+        ) : (
+          <>
+            <Boxplot data={box.data.boxes} logScale={logScale} unit={UNIT_LABELS[dimension]} />
+            <BoxplotStatsRow stats={box.data.stats} />
+            <Interpretation>
+              Cada caja resume la dispersión de <strong>{DIMENSION_LABELS[dimension].toLowerCase()}</strong>: la línea
+              central es la mediana y la caja abarca del primer al tercer cuartil (Q1–Q3).
+              {logScale
+                ? " En escala logarítmica los bigotes llegan al valor real máximo y mínimo; comprime los extremos para comparar mejor las distribuciones sesgadas."
+                : " Los bigotes se acotan al rango típico (1,5×IQR, regla de Tukey) y el máximo real, cuando es atípico, aparece como un rombo ámbar a la derecha — así la caja no se aplasta. Activa la escala logarítmica para ver el rango completo."}
+            </Interpretation>
+          </>
+        )}
       </div>
-      {box.loading ? (
-        <LoadingBlock height={340} />
-      ) : box.error ? (
-        <ErrorBlock message={box.error} onRetry={box.reload} height={340} />
-      ) : !box.data?.boxes.length ? (
-        <EmptyBlock height={340} />
-      ) : (
-        <>
-          <Boxplot data={box.data.boxes} logScale={logScale} unit={UNIT_LABELS[dimension]} />
-          <div className="mt-2 grid grid-cols-3 gap-3 text-center">
-            <div>
-              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Conteo</div>
-              <div className="text-sm font-semibold text-slate-900 tabular-nums">
-                {formatNumber(box.data.stats.count)}
-              </div>
-            </div>
-            <div>
-              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Media</div>
-              <div className="text-sm font-semibold text-slate-900 tabular-nums">
-                {box.data.stats.mean.toFixed(1)}
-              </div>
-            </div>
-            <div>
-              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Mediana</div>
-              <div className="text-sm font-semibold text-slate-900 tabular-nums">
-                {box.data.stats.p50.toFixed(1)}
-              </div>
-            </div>
-          </div>
-          <div className="export-only mt-4 pt-4 border-t border-slate-100">
-            <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-2">
-              Cuartiles por caja
-            </div>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-slate-400 border-b border-slate-100">
-                  <th className="py-1.5 pr-4 font-semibold">{DIMENSION_LABELS[dimension]}</th>
-                  <th className="py-1.5 px-3 font-semibold text-right">Mín</th>
-                  <th className="py-1.5 px-3 font-semibold text-right">Q1</th>
-                  <th className="py-1.5 px-3 font-semibold text-right">Mediana</th>
-                  <th className="py-1.5 px-3 font-semibold text-right">Q3</th>
-                  <th className="py-1.5 pl-3 font-semibold text-right">Máx</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {box.data.boxes.map((b) => (
-                  <tr key={b.label} className="text-slate-700">
-                    <td className="py-1 pr-4 whitespace-nowrap">{b.label}</td>
-                    <td className="py-1 px-3 text-right tabular-nums">{formatNumber(b.min)}</td>
-                    <td className="py-1 px-3 text-right tabular-nums">{formatNumber(b.q1)}</td>
-                    <td className="py-1 px-3 text-right tabular-nums">{formatNumber(b.median)}</td>
-                    <td className="py-1 px-3 text-right tabular-nums">{formatNumber(b.q3)}</td>
-                    <td className="py-1 pl-3 text-right tabular-nums">{formatNumber(b.max)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Interpretation>
-            Cada caja resume la dispersión de <strong>{DIMENSION_LABELS[dimension].toLowerCase()}</strong>: la línea
-            central es la mediana y los bigotes el rango. Cajas altas y bigotes largos indican gran variabilidad.
-            {logScale
-              ? " La escala logarítmica comprime los valores extremos para comparar mejor las distribuciones sesgadas."
-              : " Activa la escala logarítmica si unas pocas categorías con valores muy altos aplastan al resto."}
-          </Interpretation>
-        </>
-      )}
+
+      {/* Export view: every dimension's boxplot baked into the PDF */}
+      <div className="export-only space-y-4">
+        {BOXPLOT_DIMENSIONS.map((dim) => (
+          <BoxplotExportBlock key={dim} dimension={dim} res={results[dim]} logScale={logScale} />
+        ))}
+        <div className="pt-4 border-t border-slate-100 text-xs text-slate-500 leading-relaxed">
+          Cada caja resume la dispersión de la variable: la línea central es la mediana y la caja abarca del primer al
+          tercer cuartil (Q1–Q3).
+          {logScale
+            ? " En escala logarítmica los bigotes llegan al valor real máximo y mínimo."
+            : " Los bigotes se acotan al rango típico (1,5×IQR, regla de Tukey) y el máximo real atípico aparece como un rombo ámbar a la derecha."}
+        </div>
+      </div>
     </Card>
   );
 }
