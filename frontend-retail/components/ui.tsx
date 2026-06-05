@@ -11,19 +11,29 @@ export function Card({
   interactive = false,
   padded = true,
   accent = false,
+  onClick,
+  onMouseEnter,
+  onMouseLeave,
 }: {
   children: ReactNode;
   className?: string;
   interactive?: boolean;
   padded?: boolean;
   accent?: boolean;
+  onClick?: () => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 }) {
   return (
     <div
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
       className={cn(
         "bg-white border border-slate-200/80 rounded-xl shadow-soft",
         accent && "card-accent",
         interactive && "transition-all duration-200 hover:shadow-pop hover:-translate-y-px",
+        onClick && "cursor-pointer",
         padded && "p-4 sm:p-6",
         className,
       )}
