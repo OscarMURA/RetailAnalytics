@@ -42,7 +42,9 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.frontend
       args:
-        NEXT_PUBLIC_API_URL: https://apiretail.icesi.tech
+        # Same-origin: NPM routes retailanalytics.icesi.tech/api -> backend:8000.
+        # Avoids a second DNS dependency and CORS.
+        NEXT_PUBLIC_API_URL: https://retailanalytics.icesi.tech
     restart: unless-stopped
     expose:
       - "3000"
