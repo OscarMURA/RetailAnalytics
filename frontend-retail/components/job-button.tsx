@@ -46,6 +46,11 @@ export function JobButton({ kind, idleLabel, runningVerb, icon: Icon, onDone, ti
 
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mounted = useRef(true);
+  // Anchor the elapsed time to the job's real server-side elapsedMs so the
+  // counter is continuous across navigation (a freshly mounted button picks up
+  // the running job's true elapsed instead of restarting from 0).
+  const baseElapsedRef = useRef(0);
+  const baseAtRef = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -53,6 +58,12 @@ export function JobButton({ kind, idleLabel, runningVerb, icon: Icon, onDone, ti
       mounted.current = false;
       if (pollRef.current) clearTimeout(pollRef.current);
     };
+  }, []);
+
+  const anchorElapsed = useCallback((elapsedMs: number | null) => {
+    baseElapsedRef.current = elapsedMs ?? 0;
+    baseAtRef.current = Date.now();
+    setElapsedS(Math.floor((elapsedMs ?? 0) / 1000));
   }, []);
 
   const enterCooldown = useCallback((secs: number) => {
@@ -75,10 +86,13 @@ export function JobButton({ kind, idleLabel, runningVerb, icon: Icon, onDone, ti
     return () => clearTimeout(t);
   }, [phase, cooldownS]);
 
-  // Elapsed ticker while our job runs.
+  // Elapsed ticker while our job runs — derived from the anchored server time.
   useEffect(() => {
     if (phase !== "running") return;
-    const t = setInterval(() => setElapsedS((s) => s + 1), 1000);
+    const t = setInterval(() => {
+      const ms = baseElapsedRef.current + (Date.now() - baseAtRef.current);
+      setElapsedS(Math.floor(ms / 1000));
+    }, 1000);
     return () => clearInterval(t);
   }, [phase]);
 
@@ -88,6 +102,7 @@ export function JobButton({ kind, idleLabel, runningVerb, icon: Icon, onDone, ti
       if (!mounted.current) return true;
       if (st.running) {
         setPhase(st.kind === kind ? "running" : "busy");
+        if (st.kind === kind) anchorElapsed(st.elapsedMs);
         return false;
       }
       if (st.status === "error") {
@@ -109,7 +124,7 @@ export function JobButton({ kind, idleLabel, runningVerb, icon: Icon, onDone, ti
       }
       return true;
     },
-    [kind, onDone, enterCooldown],
+    [kind, onDone, enterCooldown, anchorElapsed],
   );
 
   const poll = useCallback(async () => {
@@ -132,7 +147,6 @@ export function JobButton({ kind, idleLabel, runningVerb, icon: Icon, onDone, ti
 
   const startPolling = useCallback(() => {
     if (pollRef.current) clearTimeout(pollRef.current);
-    setElapsedS(0);
     pollRef.current = setTimeout(poll, 1200);
   }, [poll]);
 
@@ -144,6 +158,7 @@ export function JobButton({ kind, idleLabel, runningVerb, icon: Icon, onDone, ti
         if (cancelled || !mounted.current) return;
         if (st.running) {
           setPhase(st.kind === kind ? "running" : "busy");
+          if (st.kind === kind) anchorElapsed(st.elapsedMs);
           startPolling();
         } else if (st.retryAfter > 0) {
           enterCooldown(st.retryAfter);
