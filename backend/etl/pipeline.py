@@ -43,9 +43,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="RetailAnalytics ETL")
     parser.add_argument("--input", default=str(config.DEFAULT_INPUT_DIR), help="Dataset root")
     args = parser.parse_args()
-    input_dir = Path(args.input)
+    input_dir = args.input  # str — may be a local path or a gs:// URI
 
-    config.WAREHOUSE_DIR.mkdir(parents=True, exist_ok=True)
+    if not config.is_remote(config.WAREHOUSE_DIR):
+        Path(config.WAREHOUSE_DIR).mkdir(parents=True, exist_ok=True)
     spark = get_spark()
     print(f"[ETL] input={input_dir}  warehouse={config.WAREHOUSE_DIR}")
 

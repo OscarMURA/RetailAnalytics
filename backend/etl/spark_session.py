@@ -8,6 +8,17 @@ from pyspark.sql import SparkSession
 
 
 def get_spark(app_name: str = "RetailAnalyticsETL") -> SparkSession:
+    # On Dataproc Serverless the cluster/master is managed by the platform — just
+    # take the configured session, do NOT pin a local master.
+    if os.environ.get("DATAPROC_SERVERLESS"):
+        spark = (
+            SparkSession.builder.appName(app_name)
+            .config("spark.sql.session.timeZone", "UTC")
+            .getOrCreate()
+        )
+        spark.sparkContext.setLogLevel("WARN")
+        return spark
+
     # Env overrides let the on-demand recompute cap cores/memory so the live API
     # keeps responding while Spark runs (the full batch ETL uses the defaults).
     master = os.environ.get("SPARK_MASTER", "local[*]")

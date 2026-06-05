@@ -9,8 +9,14 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
+from etl import config
 
-def read_transactions(spark: SparkSession, input_dir: Path) -> DataFrame:
+
+def _products_path(input_dir: str, filename: str) -> str:
+    return f"{str(input_dir).rstrip('/')}/Products/{filename}"
+
+
+def read_transactions(spark: SparkSession, input_dir: str) -> DataFrame:
     """Raw transactions: NO header, columns date|storeId|customerId|productCodes."""
     schema = T.StructType(
         [
@@ -20,17 +26,16 @@ def read_transactions(spark: SparkSession, input_dir: Path) -> DataFrame:
             T.StructField("productCodes", T.StringType()),
         ]
     )
-    # Enumerate files with pathlib and pass an explicit list rather than a glob:
-    # Hadoop's globber fails to expand wildcards when the path contains spaces.
-    files = sorted(str(p) for p in (input_dir / "Transactions").glob("*_Tran.csv"))
+    base = str(input_dir).rstrip("/")
+    reader = spark.read.option("sep", "|").option("header", "false").schema(schema)
+    if config.is_remote(base):
+        # GCS/Hadoop expands the glob fine (bucket paths have no spaces).
+        return reader.csv(f"{base}/Transactions/*_Tran.csv")
+    # Local: enumerate explicitly — Hadoop's globber fails on paths with spaces.
+    files = sorted(str(p) for p in (Path(base) / "Transactions").glob("*_Tran.csv"))
     if not files:
-        raise FileNotFoundError(f"No *_Tran.csv files under {input_dir / 'Transactions'}")
-    return (
-        spark.read.option("sep", "|")
-        .option("header", "false")
-        .schema(schema)
-        .csv(files)
-    )
+        raise FileNotFoundError(f"No *_Tran.csv files under {base}/Transactions")
+    return reader.csv(files)
 
 
 def _norm(name: str) -> str:
@@ -73,7 +78,7 @@ def read_product_category(spark: SparkSession, input_dir: Path) -> DataFrame:
         spark.read.option("sep", "|")
         .option("header", "true")
         .option("inferSchema", "false")
-        .csv(str(input_dir / "Products" / "ProductCategory.csv"))
+        .csv(_products_path(input_dir, "ProductCategory.csv"))
     )
     cols = raw.columns
     product_col = _pick_col(
@@ -107,7 +112,11 @@ def read_product_names(spark: SparkSession, input_dir: Path) -> DataFrame:
     ProductCatalog.csv, ProductCatalogue.csv. Expected shape: a product code
     column and a name/description column, with any reasonable header variant.
     """
-    products_dir = input_dir / "Products"
+    # Remote (gs://) datasets in this project ship no name catalog; skip the
+    # filesystem probing (Path.exists doesn't work on object storage).
+    if config.is_remote(input_dir):
+        return _empty_product_names(spark)
+    products_dir = Path(input_dir) / "Products"
     for filename in [
         "Products.csv",
         "Product.csv",
@@ -154,5 +163,5 @@ def read_categories(spark: SparkSession, input_dir: Path) -> DataFrame:
         spark.read.option("sep", "|")
         .option("header", "false")
         .schema(schema)
-        .csv(str(input_dir / "Products" / "Categories.csv"))
+        .csv(_products_path(input_dir, "Categories.csv"))
     )
