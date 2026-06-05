@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { PackageSearch, Sparkles, UserRound, Network } from "lucide-react";
+import { PackageSearch, Sparkles, UserRound, Network, Cpu } from "lucide-react";
 import { PageHeader } from "@/components/shell";
 import { Badge, Card, CardHeader, Segmented } from "@/components/ui";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "@/components/states";
+import { EntitySearch } from "@/components/entity-search";
+import { JobButton } from "@/components/job-button";
 import { HorizontalBars } from "@/components/charts/horizontal-bars";
 import { useFetch } from "@/lib/use-fetch";
+import { useReportExport } from "@/lib/use-report-export";
 import { api } from "@/lib/api";
 import { PALETTE, formatNumber } from "@/lib/constants";
 import type { ProductRecommendationItem } from "@/lib/types";
@@ -17,32 +20,69 @@ export default function RecomendadorPage() {
   const [mode, setMode] = useState<Mode>("product");
   const [productId, setProductId] = useState<string | undefined>();
   const [clientId, setClientId] = useState<string | undefined>();
+  const { rootRef, exporting, exportPdf } = useReportExport();
 
-  const seeds = useFetch(() => api.recommendationSeeds(24), []);
-  const productRecs = useFetch(() => api.productRecommendations(productId, 10), [productId]);
-  const customerRecs = useFetch(() => api.customerRecommendations(clientId, 10), [clientId]);
+  const productRecs = useFetch(() => api.productRecommendations(productId, 10), [productId], {
+    cacheKey: "productRecs",
+  });
+  const customerRecs = useFetch(() => api.customerRecommendations(clientId, 10), [clientId], {
+    cacheKey: "customerRecs",
+  });
 
-  const selectedProductId = productId ?? seeds.data?.products[0]?.code ?? "";
-  const selectedClientId = clientId ?? seeds.data?.customers[0]?.clientId ?? "";
+  // El origen efectivo es lo elegido en el buscador o, por defecto, el que la API
+  // resuelve (top por volumen) y devuelve como semilla del recomendador.
+  const selectedProductId = productId ?? productRecs.data?.seed?.code ?? "";
+  const selectedClientId = clientId ?? customerRecs.data?.customer?.clientId ?? "";
 
   const reloadAll = useCallback(() => {
-    seeds.reload();
     productRecs.reload();
     customerRecs.reload();
-  }, [seeds, productRecs, customerRecs]);
+  }, [productRecs, customerRecs]);
 
   const activeItems = mode === "product" ? productRecs.data?.items : customerRecs.data?.items;
 
+  const handleExport = () =>
+    exportPdf({
+      title: "Recomendador de productos",
+      eyebrow: "Análisis avanzado",
+      subtitle:
+        "Reglas de asociación por co-ocurrencia en canasta: confianza, lift y score para venta cruzada.",
+      filename: "RetailAnalytics-Recomendador.pdf",
+      meta: [
+        { label: "Generado", value: new Date().toLocaleDateString("es-CO") },
+        { label: "Modo", value: mode === "product" ? "Producto → productos" : "Cliente → productos" },
+        {
+          label: "Origen",
+          value:
+            mode === "product"
+              ? productRecs.data?.seed?.label ?? "—"
+              : customerRecs.data?.customer?.clientId ?? "—",
+        },
+      ],
+    });
+
   return (
-    <div className="view-enter">
+    <div className="view-enter" ref={rootRef}>
       <PageHeader
         eyebrow="Análisis avanzado"
         title="Recomendador de productos"
         subtitle="Reglas de asociación por co-ocurrencia en canasta: confianza, lift y score para venta cruzada."
         onRefresh={reloadAll}
+        onExport={handleExport}
+        exporting={exporting}
+        actions={
+          <JobButton
+            kind="recompute"
+            idleLabel="Recalcular"
+            runningVerb="Recalculando"
+            icon={Cpu}
+            onDone={reloadAll}
+            title="Re-ejecuta K-Means y las reglas de asociación con Spark (puede tardar unos minutos)."
+          />
+        }
       />
 
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 mb-6">
+      <section data-report-section className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 mb-6">
         <Card accent className="xl:col-span-1">
           <CardHeader
             icon={<Sparkles size={16} />}
@@ -60,25 +100,20 @@ export default function RecomendadorPage() {
             }
           />
 
-          {seeds.loading ? (
-            <LoadingBlock height={220} />
-          ) : seeds.error ? (
-            <ErrorBlock message={seeds.error} onRetry={seeds.reload} height={220} />
-          ) : !seeds.data ? (
-            <EmptyBlock height={220} />
-          ) : mode === "product" ? (
+          {mode === "product" ? (
             <div className="space-y-4">
               <label className="block text-xs font-medium text-slate-600">Producto origen</label>
-              <select
-                value={selectedProductId}
-                onChange={(e) => setProductId(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-              >
-                {seeds.data.products.map((p) => (
-                  <option key={p.code} value={p.code}>{p.label} · {p.category}</option>
-                ))}
-              </select>
-              {productRecs.data?.seed && (
+              <EntitySearch
+                mode="product"
+                selectedId={selectedProductId}
+                selectedLabel={productRecs.data?.seed?.label}
+                onSelect={setProductId}
+              />
+              {productRecs.loading ? (
+                <LoadingBlock height={150} />
+              ) : productRecs.error ? (
+                <ErrorBlock message={productRecs.error} onRetry={productRecs.reload} height={150} />
+              ) : productRecs.data?.seed ? (
                 <div className="rounded-lg bg-slate-50 border border-slate-200 p-4">
                   <Badge tone="emerald">Semilla</Badge>
                   <h3 className="text-lg font-bold text-slate-900 mt-3">{productRecs.data.seed.label}</h3>
@@ -88,21 +123,24 @@ export default function RecomendadorPage() {
                     <Metric label="Transacciones" value={formatNumber(productRecs.data.seed.transactions)} />
                   </div>
                 </div>
+              ) : (
+                <EmptyBlock height={150} message="Producto sin datos." />
               )}
             </div>
           ) : (
             <div className="space-y-4">
               <label className="block text-xs font-medium text-slate-600">Cliente objetivo</label>
-              <select
-                value={selectedClientId}
-                onChange={(e) => setClientId(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-              >
-                {seeds.data.customers.map((c) => (
-                  <option key={c.clientId} value={c.clientId}>{c.clientId} · {c.segmentName}</option>
-                ))}
-              </select>
-              {customerRecs.data?.customer && (
+              <EntitySearch
+                mode="customer"
+                selectedId={selectedClientId}
+                selectedLabel={customerRecs.data?.customer?.clientId}
+                onSelect={setClientId}
+              />
+              {customerRecs.loading ? (
+                <LoadingBlock height={150} />
+              ) : customerRecs.error ? (
+                <ErrorBlock message={customerRecs.error} onRetry={customerRecs.reload} height={150} />
+              ) : customerRecs.data?.customer ? (
                 <div className="rounded-lg bg-slate-50 border border-slate-200 p-4">
                   <Badge tone="blue">{customerRecs.data.customer.segmentName}</Badge>
                   <h3 className="text-lg font-bold text-slate-900 mt-3">{customerRecs.data.customer.clientId}</h3>
@@ -113,6 +151,8 @@ export default function RecomendadorPage() {
                     <Metric label="Categorías" value={formatNumber(customerRecs.data.customer.distinctCategories)} />
                   </div>
                 </div>
+              ) : (
+                <EmptyBlock height={150} message="Cliente sin datos." />
               )}
             </div>
           )}
@@ -145,7 +185,7 @@ export default function RecomendadorPage() {
         </Card>
       </section>
 
-      <section>
+      <section data-report-section>
         <Card accent>
           <CardHeader
             icon={<Network size={16} />}
